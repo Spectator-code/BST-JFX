@@ -8,6 +8,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.effect.DropShadow;
 import javafx.scene.effect.Glow;
@@ -30,7 +31,7 @@ import java.util.regex.Pattern;
 /**
  * Binary Search Tree Visualizer with panning, zooming, and a Java code editor.
  */
-public class BSTVisualizer extends Application {
+public class ExplorerView {
 
     // ── Constants ──────────────────────────────────────────────
     private static final double ROOT_Y       = 60;
@@ -73,10 +74,19 @@ public class BSTVisualizer extends Application {
                     Pattern.CASE_INSENSITIVE);
 
     private java.util.Map<String, int[]> declaredArrays = new java.util.HashMap<>();
+    
+    private boolean hideManualControls;
+
+    public ExplorerView() {
+        this(false);
+    }
+
+    public ExplorerView(boolean hideManualControls) {
+        this.hideManualControls = hideManualControls;
+    }
 
     // ── Application Entry ──────────────────────────────────────
-    @Override
-    public void start(Stage stage) {
+    public Parent getView() {
 
         // ── Canvas & Viewport (Pan/Zoom) ───────────────────────
         canvas = new Pane();
@@ -148,12 +158,14 @@ public class BSTVisualizer extends Application {
         toggleCodeBtn = styledButton("◀ Code", "#e67e22");
         toggleCodeBtn.setOnAction(e -> toggleCodePanel());
 
-        HBox controls = new HBox(10, valueField, insertBtn, deleteBtn,
-                                  searchBtn, randomBtn, clearBtn,
-                                  new Separator(Orientation.VERTICAL),
-                                  zoomInBtn, zoomOutBtn,
-                                  new Separator(Orientation.VERTICAL),
-                                  toggleCodeBtn);
+        Button backBtn = styledButton("← Back", "#555555");
+        backBtn.setOnAction(e -> App.setScene(new DashboardView().getView()));
+
+        HBox controls = new HBox(10, backBtn);
+        if (!hideManualControls) {
+            controls.getChildren().addAll(valueField, insertBtn, deleteBtn, searchBtn, randomBtn, clearBtn, new Separator(Orientation.VERTICAL));
+        }
+        controls.getChildren().addAll(zoomInBtn, zoomOutBtn, new Separator(Orientation.VERTICAL), toggleCodeBtn);
         controls.setAlignment(Pos.CENTER);
         controls.setPadding(new Insets(12));
         controls.setStyle("-fx-background-color: #16213e;");
@@ -185,16 +197,13 @@ public class BSTVisualizer extends Application {
         VBox layout = new VBox(title, controls, centerArea, statusLabel);
         VBox.setVgrow(centerArea, Priority.ALWAYS);
 
-        Scene scene = new Scene(layout, 1380, 780);
-        stage.setTitle("BST Visualizer");
-        stage.setScene(scene);
-        stage.show();
-
         // Initial centering of the virtual canvas (X=2000 is center of our virtual space)
         Platform.runLater(() -> {
             translateTransform.setX(viewport.getWidth() / 2 - 2000);
             translateTransform.setY(20);
         });
+
+        return layout;
     }
 
     private void doZoom(double factor, double pivotX, double pivotY) {
@@ -217,6 +226,18 @@ public class BSTVisualizer extends Application {
     // ═══════════════════════════════════════════════════════════
     //  Code Panel
     // ═══════════════════════════════════════════════════════════
+
+    public String getCode() {
+        return codeArea == null ? "" : codeArea.getText();
+    }
+
+    public boolean hasNode(int value) {
+        return find(root, value) != null;
+    }
+
+    public String getOutputLog() {
+        return outputArea == null ? "" : outputArea.getText();
+    }
 
     private VBox buildCodePanel() {
         Label panelTitle = new Label("📝 Java Code Editor");
@@ -991,7 +1012,5 @@ public class BSTVisualizer extends Application {
     }
 
     // ── Main ───────────────────────────────────────────────────
-    public static void main(String[] args) {
-        launch(args);
-    }
+
 }
