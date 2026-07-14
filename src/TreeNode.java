@@ -15,9 +15,13 @@ public class TreeNode {
     public TreeNode right;
     public TreeNode parent;
 
+    public int height = 1;
+    public boolean isRed = true; // New nodes are Red by default in RBT
+
     // Visual elements
     public Circle circle;
     public Text label;
+    public Text balanceLabel; // Displays the AVL balance factor (+1, 0, -1)
     public Line edgeToParent; // null for root
 
     // Target layout position (used for auto re-layout animation)
@@ -35,6 +39,10 @@ public class TreeNode {
         label = new Text(String.valueOf(value));
         label.setFill(Color.WHITE);
         label.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
+
+        balanceLabel = new Text("0");
+        balanceLabel.setFill(Color.web("#a0b4ff"));
+        balanceLabel.setStyle("-fx-font-size: 11px; -fx-font-weight: bold;");
     }
 
     /** Moves the circle + label instantly to (x, y) with no animation. */

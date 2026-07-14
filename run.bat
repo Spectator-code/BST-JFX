@@ -1,6 +1,6 @@
 @echo off
 echo Compiling...
-javac --module-path javafx-sdk\javafx-sdk-21.0.7\lib --add-modules javafx.controls -d out src\*.java
+javac --module-path "%~dp0javafx-sdk\javafx-sdk-21.0.2\lib" --add-modules javafx.controls -d out src\*.java
 if %errorlevel% neq 0 exit /b %errorlevel%
 echo Running...
-java --module-path javafx-sdk\javafx-sdk-21.0.7\lib --add-modules javafx.controls -cp out App
+java -Djava.library.path="%~dp0javafx-sdk\javafx-sdk-21.0.2\bin" --module-path "%~dp0javafx-sdk\javafx-sdk-21.0.2\lib" --add-modules javafx.controls,javafx.graphics -cp out App

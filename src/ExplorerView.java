@@ -2,7 +2,8 @@ import javafx.animation.KeyFrame;
 import javafx.animation.KeyValue;
 import javafx.animation.Timeline;
 import javafx.animation.PauseTransition;
-import javafx.application.Application;
+import javafx.animation.FadeTransition;
+import javafx.animation.Interpolator;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
@@ -17,10 +18,10 @@ import javafx.scene.paint.Color;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
 import javafx.scene.text.Text;
 import javafx.scene.transform.Scale;
 import javafx.scene.transform.Translate;
-import javafx.stage.Stage;
 import javafx.util.Duration;
 
 import java.util.ArrayList;
@@ -50,7 +51,13 @@ public class ExplorerView {
     private Button toggleCodeBtn;
     private boolean codePanelVisible = true;
     private TextArea outputArea;
+    private String currentMode = "BST"; // "BST" or "AVL"
     private int executingLine = -1;
+    private int animationSpeed = 4;
+    private String accentColorHex = Theme.TEAL;
+    private Button activeModeButton;
+    private Button[] treeModeButtons;
+    private Slider speedSlider;
 
     // Pan & Zoom state
     private Scale scaleTransform = new Scale(1, 1, 0, 0);
@@ -63,7 +70,7 @@ public class ExplorerView {
             Pattern.compile("^\\s*(?:\\w+\\.)(insert|delete|search|clear)\\s*\\(\\s*(\\d*)\\s*\\)\\s*;?\\s*$",
                     Pattern.CASE_INSENSITIVE);
     private static final Pattern CONSTRUCTOR =
-            Pattern.compile("^\\s*(?:BinarySearchTree|BST|TreeNode)\\s+\\w+\\s*=\\s*new\\s+(?:BinarySearchTree|BST|TreeNode)\\s*\\(\\s*\\)\\s*;?\\s*$",
+            Pattern.compile("^\\s*(?:BinarySearchTree|BST|AVLTree|AVL|RedBlackTree|RBT|RedBlack|TreeNode)\\s+\\w+\\s*=\\s*new\\s+(?:BinarySearchTree|BST|AVLTree|AVL|RedBlackTree|RBT|RedBlack|TreeNode)\\s*\\(\\s*\\)\\s*;?\\s*$",
                     Pattern.CASE_INSENSITIVE);
     private static final Pattern SYSOUT =
             Pattern.compile("^\\s*System\\.out\\.println\\s*\\((.*)\\)\\s*;?\\s*$");
@@ -76,6 +83,24 @@ public class ExplorerView {
     private java.util.Map<String, int[]> declaredArrays = new java.util.HashMap<>();
     
     private boolean hideManualControls;
+
+    // Node Inspector Fields
+    private VBox inspectorCard;
+    private Label inspTitle;
+    private Label inspValue;
+    private Label inspHeight;
+    private Label inspDepth;
+    private Label inspBF;
+    private Label inspParent;
+    private Label inspChildren;
+
+    public int getRootValue() {
+        return root == null ? -1 : root.value;
+    }
+
+    public int getHeight() {
+        return root == null ? 0 : root.height;
+    }
 
     public ExplorerView() {
         this(false);
@@ -95,7 +120,7 @@ public class ExplorerView {
         canvas.getTransforms().addAll(translateTransform, scaleTransform);
 
         viewport = new Pane(canvas);
-        viewport.setStyle("-fx-background-color: #1a1a2e;");
+        viewport.setStyle("-fx-background-color: #0a0f2e;");
         viewport.setMinSize(0, 0);
         viewport.setPrefSize(800, 600);
         
@@ -131,67 +156,68 @@ public class ExplorerView {
             doZoom(zoomFactor, e.getX(), e.getY());
         });
 
-        // ── Controls Bar ───────────────────────────────────────
-        TextField valueField = new TextField();
-        valueField.setPromptText("Value");
-        valueField.setPrefWidth(90);
-        valueField.setStyle(fieldStyle());
-
-        Button insertBtn  = styledButton("Insert",  "#27ae60");
-        Button deleteBtn  = styledButton("Delete",  "#c0392b");
-        Button searchBtn  = styledButton("Search",  "#2980b9");
-        Button randomBtn  = styledButton("Random",  "#8e44ad");
-        Button clearBtn   = styledButton("Clear",   "#7f8c8d");
-
-        insertBtn.setOnAction(e -> handleInsert(valueField));
-        deleteBtn.setOnAction(e -> handleDelete(valueField));
-        searchBtn.setOnAction(e -> handleSearch(valueField));
-        randomBtn.setOnAction(e -> handleRandom());
-        clearBtn.setOnAction(e  -> handleClear());
-        valueField.setOnAction(e -> handleInsert(valueField));
-
+        // ── Controls Bar (simplified to Zoom, Back, Code editor controls) ──
         Button zoomInBtn = styledButton("🔍+", "#8e44ad");
         Button zoomOutBtn = styledButton("🔍-", "#8e44ad");
         zoomInBtn.setOnAction(e -> doZoom(1.2, viewport.getWidth()/2, viewport.getHeight()/2));
         zoomOutBtn.setOnAction(e -> doZoom(0.8, viewport.getWidth()/2, viewport.getHeight()/2));
 
+        Button centerBtn = styledButton("🔍 Reset", "#34495e");
+        centerBtn.setOnAction(e -> {
+            scaleTransform.setX(1.0);
+            scaleTransform.setY(1.0);
+            translateTransform.setX(viewport.getWidth() / 2 - 2000);
+            translateTransform.setY(20);
+            status("View reset to center");
+        });
+
         toggleCodeBtn = styledButton("◀ Code", "#e67e22");
         toggleCodeBtn.setOnAction(e -> toggleCodePanel());
 
         Button backBtn = styledButton("← Back", "#555555");
-        backBtn.setOnAction(e -> App.setScene(new DashboardView().getView()));
+        backBtn.setOnAction(e -> App.changeScene(new DashboardView().getView()));
 
         HBox controls = new HBox(10, backBtn);
-        if (!hideManualControls) {
-            controls.getChildren().addAll(valueField, insertBtn, deleteBtn, searchBtn, randomBtn, clearBtn, new Separator(Orientation.VERTICAL));
-        }
-        controls.getChildren().addAll(zoomInBtn, zoomOutBtn, new Separator(Orientation.VERTICAL), toggleCodeBtn);
+        controls.getChildren().addAll(zoomInBtn, zoomOutBtn, centerBtn, new Separator(Orientation.VERTICAL), toggleCodeBtn);
         controls.setAlignment(Pos.CENTER);
         controls.setPadding(new Insets(12));
-        controls.setStyle("-fx-background-color: #16213e;");
+        controls.setStyle("-fx-background-color: #0c1236;");
 
         // ── Status Bar ─────────────────────────────────────────
         statusLabel = new Label("Ready — enter a value or write Java code in the panel. Scroll to zoom, drag to pan.");
-        statusLabel.setTextFill(Color.web("#bdc3c7"));
+        statusLabel.setTextFill(Color.web("#a0b4ff"));
         statusLabel.setFont(Font.font("Consolas", 13));
         statusLabel.setPadding(new Insets(6, 14, 6, 14));
-        statusLabel.setStyle("-fx-background-color: #0f3460;");
+        statusLabel.setStyle("-fx-background-color: #0c1236;");
         statusLabel.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(statusLabel, Priority.ALWAYS);
 
         // ── Title ──────────────────────────────────────────────
-        Label title = new Label("Binary Search Tree Visualizer");
-        title.setTextFill(Color.web("#e94560"));
-        title.setFont(Font.font("Segoe UI", 22));
+        Label title = new Label("🌳  Binary Search Tree Visualizer");
+        title.setTextFill(Color.web("#4d80ff"));
+        title.setFont(Font.font("Arial", 22));
         title.setPadding(new Insets(10));
-        title.setStyle("-fx-background-color: #16213e; -fx-font-weight: bold;");
+        title.setStyle("-fx-background-color: #0c1236; -fx-font-weight: bold;");
         title.setMaxWidth(Double.MAX_VALUE);
         title.setAlignment(Pos.CENTER);
 
         // ── Code Panel ─────────────────────────────────────────
         codePanel = buildCodePanel();
 
-        HBox centerArea = new HBox(viewport, codePanel);
+        // ── Initialize Node Inspector Card (Viewport Overlay) ──
+        inspectorCard = buildInspectorCard();
+        // Removed viewport overlay addition to hide inspector card from all pages as requested.
+        // viewport.getChildren().add(inspectorCard);
+        inspectorCard.setLayoutX(14);
+        inspectorCard.layoutYProperty().bind(viewport.heightProperty().subtract(170));
+
+        HBox centerArea;
+        if (!hideManualControls) {
+            ScrollPane sidebar = buildSidebar();
+            centerArea = new HBox(sidebar, viewport, codePanel);
+        } else {
+            centerArea = new HBox(viewport, codePanel);
+        }
         HBox.setHgrow(viewport, Priority.ALWAYS);
 
         VBox layout = new VBox(title, controls, centerArea, statusLabel);
@@ -204,6 +230,635 @@ public class ExplorerView {
         });
 
         return layout;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Left Sidebar UI & Functionality
+    // ═══════════════════════════════════════════════════════════
+
+    private VBox createSidebarSection(String titleStr, Pane content) {
+        Label title = new Label(titleStr);
+        title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+        title.setTextFill(Color.web("#8da2fb"));
+        
+        VBox section = new VBox(8, title, content);
+        section.setStyle(
+            "-fx-background-color: #121e3d;" +
+            "-fx-background-radius: 8;" +
+            "-fx-padding: 12;" +
+            "-fx-border-color: #1e2c56;" +
+            "-fx-border-radius: 8;" +
+            "-fx-border-width: 1;"
+        );
+        return section;
+    }
+
+    private Button createSidebarButton(String text, String bgColor, String textColor) {
+        Button btn = new Button(text);
+        btn.setStyle(
+            "-fx-background-color: " + bgColor + ";" +
+            "-fx-text-fill: " + textColor + ";" +
+            "-fx-font-family: 'Segoe UI';" +
+            "-fx-font-size: 12px;" +
+            "-fx-font-weight: bold;" +
+            "-fx-padding: 6 12;" +
+            "-fx-background-radius: 4;" +
+            "-fx-border-color: transparent;" +
+            "-fx-border-radius: 4;" +
+            "-fx-cursor: hand;"
+        );
+        btn.setOnMouseEntered(e -> btn.setOpacity(0.85));
+        btn.setOnMouseExited(e -> btn.setOpacity(1.0));
+        return btn;
+    }
+
+    private Button createSidebarOutlineButton(String text) {
+        Button btn = new Button(text);
+        btn.setStyle(
+            "-fx-background-color: #121e3d;" +
+            "-fx-text-fill: #a0b4ff;" +
+            "-fx-font-family: 'Segoe UI';" +
+            "-fx-font-size: 12px;" +
+            "-fx-font-weight: bold;" +
+            "-fx-padding: 6 12;" +
+            "-fx-background-radius: 4;" +
+            "-fx-border-color: #2c3b6b;" +
+            "-fx-border-width: 1;" +
+            "-fx-border-radius: 4;" +
+            "-fx-cursor: hand;"
+        );
+        btn.setOnMouseEntered(e -> {
+            btn.setStyle(
+                "-fx-background-color: #1a2c5c;" +
+                "-fx-text-fill: #ffffff;" +
+                "-fx-font-family: 'Segoe UI';" +
+                "-fx-font-size: 12px;" +
+                "-fx-font-weight: bold;" +
+                "-fx-padding: 6 12;" +
+                "-fx-background-radius: 4;" +
+                "-fx-border-color: #4d80ff;" +
+                "-fx-border-width: 1;" +
+                "-fx-border-radius: 4;" +
+                "-fx-cursor: hand;"
+            );
+        });
+        btn.setOnMouseExited(e -> {
+            btn.setStyle(
+                "-fx-background-color: #121e3d;" +
+                "-fx-text-fill: #a0b4ff;" +
+                "-fx-font-family: 'Segoe UI';" +
+                "-fx-font-size: 12px;" +
+                "-fx-font-weight: bold;" +
+                "-fx-padding: 6 12;" +
+                "-fx-background-radius: 4;" +
+                "-fx-border-color: #2c3b6b;" +
+                "-fx-border-width: 1;" +
+                "-fx-border-radius: 4;" +
+                "-fx-cursor: hand;"
+            );
+        });
+        return btn;
+    }
+
+    private void setTreeModeActive(Button activeBtn, Button[] otherBtns) {
+        activeBtn.setStyle(
+            "-fx-background-color: " + Theme.TEAL + ";" +
+            "-fx-text-fill: " + Theme.BG + ";" +
+            "-fx-font-family: 'Segoe UI';" +
+            "-fx-font-size: 12px;" +
+            "-fx-font-weight: bold;" +
+            "-fx-padding: 6 12;" +
+            "-fx-background-radius: 4;" +
+            "-fx-border-color: transparent;" +
+            "-fx-cursor: hand;"
+        );
+        activeBtn.setOnMouseEntered(null);
+        activeBtn.setOnMouseExited(null);
+
+        for (Button btn : otherBtns) {
+            btn.setStyle(
+                "-fx-background-color: #121e3d;" +
+                "-fx-text-fill: #a0b4ff;" +
+                "-fx-font-family: 'Segoe UI';" +
+                "-fx-font-size: 12px;" +
+                "-fx-font-weight: bold;" +
+                "-fx-padding: 6 12;" +
+                "-fx-background-radius: 4;" +
+                "-fx-border-color: #2c3b6b;" +
+                "-fx-border-width: 1;" +
+                "-fx-border-radius: 4;" +
+                "-fx-cursor: hand;"
+            );
+            btn.setOnMouseEntered(e -> {
+                btn.setStyle(
+                    "-fx-background-color: #1a2c5c;" +
+                    "-fx-text-fill: #ffffff;" +
+                    "-fx-font-family: 'Segoe UI';" +
+                    "-fx-font-size: 12px;" +
+                    "-fx-font-weight: bold;" +
+                    "-fx-padding: 6 12;" +
+                    "-fx-background-radius: 4;" +
+                    "-fx-border-color: #4d80ff;" +
+                    "-fx-border-width: 1;" +
+                    "-fx-border-radius: 4;" +
+                    "-fx-cursor: hand;"
+                );
+            });
+            btn.setOnMouseExited(e -> {
+                btn.setStyle(
+                    "-fx-background-color: #121e3d;" +
+                    "-fx-text-fill: #a0b4ff;" +
+                    "-fx-font-family: 'Segoe UI';" +
+                    "-fx-font-size: 12px;" +
+                    "-fx-font-weight: bold;" +
+                    "-fx-padding: 6 12;" +
+                    "-fx-background-radius: 4;" +
+                    "-fx-border-color: #2c3b6b;" +
+                    "-fx-border-width: 1;" +
+                    "-fx-border-radius: 4;" +
+                    "-fx-cursor: hand;"
+                );
+            });
+        }
+    }
+
+    private ScrollPane buildSidebar() {
+        VBox sidebar = new VBox(14);
+        sidebar.setPadding(new Insets(14));
+        sidebar.setPrefWidth(260);
+        sidebar.setMinWidth(260);
+        sidebar.setStyle("-fx-background-color: #0c1236;");
+
+        // 1. TREE MODE
+        HBox treeModeContent = new HBox(4);
+        Button bstBtn = createSidebarButton("BST", accentColorHex, "#0a0f2e");
+        Button avlBtn = createSidebarOutlineButton("AVL");
+        Button rbBtn = createSidebarOutlineButton("Red-Black");
+        Button btreeBtn = createSidebarOutlineButton("🔒 B-Tree");
+        
+        treeModeButtons = new Button[]{bstBtn, avlBtn, rbBtn, btreeBtn};
+        activeModeButton = bstBtn;
+        
+        bstBtn.setOnAction(e -> {
+            setTreeModeActive(bstBtn, new Button[]{avlBtn, rbBtn, btreeBtn});
+            currentMode = "BST";
+            toggleBalanceLabels(false);
+            status("Tree Mode: Binary Search Tree (BST)");
+            resetColors();
+        });
+        avlBtn.setOnAction(e -> {
+            setTreeModeActive(avlBtn, new Button[]{bstBtn, rbBtn, btreeBtn});
+            currentMode = "AVL";
+            recomputeHeights(root);
+            toggleBalanceLabels(true);
+            status("Switched to AVL Tree Mode. Balancing the tree...");
+            stepwiseBalanceBST(null);
+        });
+        rbBtn.setOnAction(e -> {
+            setTreeModeActive(rbBtn, new Button[]{bstBtn, avlBtn, btreeBtn});
+            currentMode = "Red-Black";
+            toggleBalanceLabels(false);
+            status("Switched to Red-Black Tree Mode. Rebuilding tree step-by-step...");
+            convertToRedBlackStepwise(null);
+        });
+        btreeBtn.setOnAction(e -> {
+            setTreeModeActive(btreeBtn, new Button[]{bstBtn, avlBtn, rbBtn});
+            status("B-Tree Mode is currently under development. Showing BST simulation.");
+        });
+        
+        treeModeContent.getChildren().addAll(bstBtn, avlBtn, rbBtn, btreeBtn);
+        VBox treeModeSection = createSidebarSection("TREE MODE", treeModeContent);
+
+        // 2. OPERATIONS
+        VBox operationsContent = new VBox(8);
+        TextField valueField = new TextField();
+        valueField.setPromptText("Value (1-999)");
+        valueField.setStyle(sidebarFieldStyle());
+        valueField.setPrefWidth(120);
+        HBox.setHgrow(valueField, Priority.ALWAYS);
+        
+        Button insertBtn = createSidebarButton("Insert", "#10b981", "#ffffff");
+        HBox row1 = new HBox(6, valueField, insertBtn);
+        
+        Button deleteBtn = createSidebarButton("Delete", "#ef4444", "#ffffff");
+        deleteBtn.setPrefWidth(100);
+        Button searchBtn = createSidebarButton("Search", "#3b82f6", "#ffffff");
+        searchBtn.setPrefWidth(100);
+        HBox row2 = new HBox(6, deleteBtn, searchBtn);
+        row2.setAlignment(Pos.CENTER);
+        
+        Button randomBtn = createSidebarOutlineButton("Random");
+        randomBtn.setPrefWidth(100);
+        Button clearBtn = createSidebarOutlineButton("Clear");
+        clearBtn.setPrefWidth(100);
+        HBox row3 = new HBox(6, randomBtn, clearBtn);
+        row3.setAlignment(Pos.CENTER);
+        
+        insertBtn.setOnAction(e -> handleInsert(valueField));
+        deleteBtn.setOnAction(e -> handleDelete(valueField));
+        searchBtn.setOnAction(e -> handleSearch(valueField));
+        randomBtn.setOnAction(e -> handleRandom());
+        clearBtn.setOnAction(e -> handleClear());
+        valueField.setOnAction(e -> handleInsert(valueField));
+        
+        operationsContent.getChildren().addAll(row1, row2, row3);
+        VBox operationsSection = createSidebarSection("OPERATIONS", operationsContent);
+
+        // 3. BATCH INSERT
+        TextField batchField = new TextField();
+        batchField.setPromptText("e.g. 50,30,70,20,40");
+        batchField.setStyle(sidebarFieldStyle());
+        HBox.setHgrow(batchField, Priority.ALWAYS);
+        Button goBtn = createSidebarButton("Go", "#10b981", "#ffffff");
+        HBox batchContent = new HBox(6, batchField, goBtn);
+        goBtn.setOnAction(e -> {
+            handleBatchInsert(batchField.getText());
+            batchField.clear();
+        });
+        batchField.setOnAction(e -> {
+            handleBatchInsert(batchField.getText());
+            batchField.clear();
+        });
+        VBox batchSection = createSidebarSection("BATCH INSERT", batchContent);
+
+        // 4. PRESETS
+        VBox presetsContent = new VBox(6);
+        Button balancedBtn = createSidebarOutlineButton("Balanced");
+        Button skewedBtn = createSidebarOutlineButton("Skewed");
+        Button rand10Btn = createSidebarOutlineButton("Random 10");
+        HBox pRow1 = new HBox(4, balancedBtn, skewedBtn, rand10Btn);
+        
+        Button rand20Btn = createSidebarOutlineButton("Random 20");
+        Button sortedBtn = createSidebarOutlineButton("Sorted (Worst)");
+        Button zigzagBtn = createSidebarOutlineButton("Zig-Zag");
+        HBox pRow2 = new HBox(4, rand20Btn, sortedBtn, zigzagBtn);
+        
+        Button completeBtn = createSidebarOutlineButton("Complete");
+        Button fibBtn = createSidebarOutlineButton("Fibonacci");
+        HBox pRow3 = new HBox(4, completeBtn, fibBtn);
+        
+        balancedBtn.setOnAction(e -> loadPresetBalanced());
+        skewedBtn.setOnAction(e -> loadPresetSkewed());
+        rand10Btn.setOnAction(e -> loadPresetRandom(10));
+        rand20Btn.setOnAction(e -> loadPresetRandom(20));
+        sortedBtn.setOnAction(e -> loadPresetSorted());
+        zigzagBtn.setOnAction(e -> loadPresetZigZag());
+        completeBtn.setOnAction(e -> loadPresetComplete());
+        fibBtn.setOnAction(e -> loadPresetFibonacci());
+        
+        presetsContent.getChildren().addAll(pRow1, pRow2, pRow3);
+        VBox presetsSection = createSidebarSection("PRESETS", presetsContent);
+
+        // 5. TRAVERSALS
+        VBox traversalsContent = new VBox(8);
+        Button inorderBtn = createSidebarOutlineButton("In-Order");
+        Button preorderBtn = createSidebarOutlineButton("Pre-Order");
+        Button postorderBtn = createSidebarOutlineButton("Post-Order");
+        HBox tRow1 = new HBox(4, inorderBtn, preorderBtn, postorderBtn);
+        
+        Button levelorderBtn = createSidebarOutlineButton("Level-Order");
+        HBox tRow2 = new HBox(4, levelorderBtn);
+        
+        Label traversalResult = new Label();
+        traversalResult.setTextFill(Color.web("#a0b4ff"));
+        traversalResult.setFont(Font.font("Consolas", 12));
+        traversalResult.setWrapText(true);
+        
+        VBox resultBox = new VBox(traversalResult);
+        resultBox.setMinHeight(32);
+        resultBox.setPadding(new Insets(6));
+        resultBox.setStyle("-fx-background-color: #0a0f2e; -fx-background-radius: 4;");
+        
+        inorderBtn.setOnAction(e -> {
+            List<TreeNode> path = new ArrayList<>();
+            inOrder(root, path);
+            animateTraversal(path, traversalResult);
+        });
+        preorderBtn.setOnAction(e -> {
+            List<TreeNode> path = new ArrayList<>();
+            preOrder(root, path);
+            animateTraversal(path, traversalResult);
+        });
+        postorderBtn.setOnAction(e -> {
+            List<TreeNode> path = new ArrayList<>();
+            postOrder(root, path);
+            animateTraversal(path, traversalResult);
+        });
+        levelorderBtn.setOnAction(e -> {
+            List<TreeNode> path = new ArrayList<>();
+            levelOrder(root, path);
+            animateTraversal(path, traversalResult);
+        });
+        
+        traversalsContent.getChildren().addAll(tRow1, tRow2, resultBox);
+        VBox traversalsSection = createSidebarSection("TRAVERSALS", traversalsContent);
+
+        // 6. THEME ACCENT
+        HBox accentContent = new HBox(12);
+        accentContent.setAlignment(Pos.CENTER);
+        Button swatchTeal = createColorSwatch(Theme.TEAL);
+        Button swatchViolet = createColorSwatch("#9b5de5");
+        Button swatchCoral = createColorSwatch("#ff6b6b");
+        Button swatchGold = createColorSwatch("#f1c40f");
+        
+        swatchTeal.setOnAction(e -> updateAccentTheme(Theme.TEAL));
+        swatchViolet.setOnAction(e -> updateAccentTheme("#9b5de5"));
+        swatchCoral.setOnAction(e -> updateAccentTheme("#ff6b6b"));
+        swatchGold.setOnAction(e -> updateAccentTheme("#f1c40f"));
+        
+        accentContent.getChildren().addAll(swatchTeal, swatchViolet, swatchCoral, swatchGold);
+        VBox accentSection = createSidebarSection("THEME ACCENT", accentContent);
+
+        // 7. ANIMATION SPEED
+        HBox speedContent = new HBox(10);
+        speedContent.setAlignment(Pos.CENTER_LEFT);
+        speedSlider = new Slider(1, 10, 4);
+        speedSlider.setBlockIncrement(1);
+        speedSlider.setMajorTickUnit(1);
+        speedSlider.setMinorTickCount(0);
+        speedSlider.setSnapToTicks(true);
+        HBox.setHgrow(speedSlider, Priority.ALWAYS);
+        
+        speedSlider.setStyle(
+            ".slider .track { -fx-background-color: #1e2c56; -fx-background-insets: 0; -fx-background-radius: 4; }" +
+            ".slider .thumb { -fx-background-color: " + accentColorHex + "; -fx-background-radius: 10; }"
+        );
+
+        Label speedValueLabel = new Label("4");
+        speedValueLabel.setTextFill(Color.web(Theme.TEAL));
+        speedValueLabel.setFont(Font.font("Segoe UI", FontWeight.BOLD, 14));
+        speedValueLabel.setPrefWidth(20);
+        speedValueLabel.setAlignment(Pos.CENTER_RIGHT);
+
+        speedSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
+            int speed = newVal.intValue();
+            animationSpeed = speed;
+            speedValueLabel.setText(String.valueOf(speed));
+            speedValueLabel.setTextFill(Color.web(accentColorHex));
+        });
+
+        speedContent.getChildren().addAll(speedSlider, speedValueLabel);
+        VBox speedSection = createSidebarSection("ANIMATION SPEED", speedContent);
+
+        sidebar.getChildren().addAll(treeModeSection, operationsSection, batchSection, presetsSection, traversalsSection, accentSection, speedSection);
+        
+        ScrollPane sp = new ScrollPane(sidebar);
+        sp.setFitToWidth(true);
+        sp.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        sp.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        sp.setStyle("-fx-background: #0c1236; -fx-background-color: #0c1236; -fx-border-color: #1e2c56; -fx-border-width: 0 1 0 0;");
+        sp.setMinWidth(290);
+        sp.setPrefWidth(290);
+        return sp;
+    }
+
+    private Button createColorSwatch(String colorHex) {
+        Button btn = new Button();
+        btn.setPrefSize(24, 24);
+        btn.setMinSize(24, 24);
+        btn.setMaxSize(24, 24);
+        btn.setStyle(
+            "-fx-background-color: " + colorHex + ";" +
+            "-fx-background-radius: 12;" +
+            "-fx-border-color: #2c3b6b;" +
+            "-fx-border-width: 1;" +
+            "-fx-border-radius: 12;" +
+            "-fx-cursor: hand;"
+        );
+        btn.setOnMouseEntered(e -> btn.setStyle(
+            "-fx-background-color: " + colorHex + ";" +
+            "-fx-background-radius: 12;" +
+            "-fx-border-color: #ffffff;" +
+            "-fx-border-width: 2;" +
+            "-fx-border-radius: 12;" +
+            "-fx-cursor: hand;"
+        ));
+        btn.setOnMouseExited(e -> btn.setStyle(
+            "-fx-background-color: " + colorHex + ";" +
+            "-fx-background-radius: 12;" +
+            "-fx-border-color: #2c3b6b;" +
+            "-fx-border-width: 1;" +
+            "-fx-border-radius: 12;" +
+            "-fx-cursor: hand;"
+        ));
+        return btn;
+    }
+
+    private void updateAccentTheme(String hexColor) {
+        accentColorHex = hexColor;
+        
+        // Re-apply style to active tree mode button
+        if (activeModeButton != null) {
+            Button[] others = java.util.Arrays.stream(treeModeButtons)
+                .filter(b -> b != activeModeButton)
+                .toArray(Button[]::new);
+            setTreeModeActive(activeModeButton, others);
+        }
+        
+        // Update speed slider accent color if it exists
+        if (speedSlider != null) {
+            speedSlider.setStyle(
+                ".slider .track { -fx-background-color: #1e2c56; -fx-background-insets: 0; -fx-background-radius: 4; }" +
+                ".slider .thumb { -fx-background-color: " + hexColor + "; -fx-background-radius: 10; }"
+            );
+        }
+        
+        // Refresh all tree nodes immediately to use the new base color
+        resetColors();
+    }
+
+    private String sidebarFieldStyle() {
+        return "-fx-background-color: #0a0f2e;" +
+               "-fx-text-fill: white;" +
+               "-fx-prompt-text-fill: #4d5c8a;" +
+               "-fx-border-color: #1e2c56;" +
+               "-fx-border-radius: 4;" +
+               "-fx-background-radius: 4;" +
+               "-fx-padding: 6;" +
+               "-fx-font-size: 12px;";
+    }
+
+    private void handleBatchInsert(String text) {
+        if (text == null || text.trim().isEmpty()) return;
+        String[] parts = text.split(",");
+        List<Integer> vals = new ArrayList<>();
+        for (String p : parts) {
+            try {
+                vals.add(Integer.parseInt(p.trim()));
+            } catch (NumberFormatException e) {
+                // ignore invalid numbers
+            }
+        }
+        if (vals.isEmpty()) return;
+        insertSequence(vals, 0);
+    }
+
+    private void insertSequence(List<Integer> vals, int index) {
+        if (index >= vals.size()) {
+            status("Batch insertion complete");
+            return;
+        }
+        int val = vals.get(index);
+        insert(val);
+        highlightNode(val, Color.web("#10b981"), 800);
+        
+        PauseTransition pause = new PauseTransition(Duration.millis(getAnimMs() + 100));
+        pause.setOnFinished(e -> insertSequence(vals, index + 1));
+        pause.play();
+    }
+
+    private double getAnimMs() {
+        return 1400.0 / animationSpeed;
+    }
+
+    private double getExecDelay() {
+        return 2800.0 / animationSpeed;
+    }
+
+    private void loadPresetBalanced() {
+        handleClear();
+        int[] vals = {40, 20, 60, 10, 30, 50, 70};
+        List<Integer> list = new ArrayList<>();
+        for (int v : vals) list.add(v);
+        insertSequence(list, 0);
+    }
+
+    private void loadPresetSkewed() {
+        handleClear();
+        int[] vals = {10, 20, 30, 40, 50, 60};
+        List<Integer> list = new ArrayList<>();
+        for (int v : vals) list.add(v);
+        insertSequence(list, 0);
+    }
+
+    private void loadPresetRandom(int count) {
+        handleClear();
+        java.util.Random rng = new java.util.Random();
+        java.util.Set<Integer> used = new java.util.HashSet<>();
+        List<Integer> list = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            int val;
+            do { val = rng.nextInt(99) + 1; } while (used.contains(val));
+            used.add(val);
+            list.add(val);
+        }
+        insertSequence(list, 0);
+    }
+
+    private void loadPresetSorted() {
+        handleClear();
+        int[] vals = {10, 20, 30, 40, 50, 60, 70};
+        List<Integer> list = new ArrayList<>();
+        for (int v : vals) list.add(v);
+        insertSequence(list, 0);
+    }
+
+    private void loadPresetZigZag() {
+        handleClear();
+        int[] vals = {50, 20, 40, 30, 35};
+        List<Integer> list = new ArrayList<>();
+        for (int v : vals) list.add(v);
+        insertSequence(list, 0);
+    }
+
+    private void loadPresetComplete() {
+        handleClear();
+        int[] vals = {50, 25, 75, 12, 37, 62, 87, 6, 18, 31, 43};
+        List<Integer> list = new ArrayList<>();
+        for (int v : vals) list.add(v);
+        insertSequence(list, 0);
+    }
+
+    private void loadPresetFibonacci() {
+        handleClear();
+        int[] vals = {13, 5, 34, 2, 8, 21, 55, 1, 3, 89};
+        List<Integer> list = new ArrayList<>();
+        for (int v : vals) list.add(v);
+        insertSequence(list, 0);
+    }
+
+    private void inOrder(TreeNode node, List<TreeNode> list) {
+        if (node == null) return;
+        inOrder(node.left, list);
+        list.add(node);
+        inOrder(node.right, list);
+    }
+
+    private void preOrder(TreeNode node, List<TreeNode> list) {
+        if (node == null) return;
+        list.add(node);
+        preOrder(node.left, list);
+        preOrder(node.right, list);
+    }
+
+    private void postOrder(TreeNode node, List<TreeNode> list) {
+        if (node == null) return;
+        postOrder(node.left, list);
+        postOrder(node.right, list);
+        list.add(node);
+    }
+
+    private void levelOrder(TreeNode node, List<TreeNode> list) {
+        if (node == null) return;
+        List<TreeNode> queue = new ArrayList<>();
+        queue.add(node);
+        while (!queue.isEmpty()) {
+            TreeNode curr = queue.remove(0);
+            list.add(curr);
+            if (curr.left != null) queue.add(curr.left);
+            if (curr.right != null) queue.add(curr.right);
+        }
+    }
+
+    private void animateTraversal(List<TreeNode> path, Label resultLabel) {
+        if (path.isEmpty()) {
+            resultLabel.setText("Tree is empty");
+            return;
+        }
+        resetColors();
+        resetScales(root);
+        
+        double stepMs = 2400.0 / animationSpeed;
+        Timeline tl = new Timeline();
+        StringBuilder sb = new StringBuilder();
+        
+        for (int i = 0; i < path.size(); i++) {
+            TreeNode n = path.get(i);
+            int idx = i;
+            tl.getKeyFrames().add(new KeyFrame(
+                Duration.millis(stepMs * i),
+                e -> {
+                    n.circle.setFill(Color.web("#9b5de5"));
+                    n.circle.setScaleX(1.2);
+                    n.circle.setScaleY(1.2);
+                    if (idx > 0) {
+                        TreeNode prev = path.get(idx - 1);
+                        prev.circle.setFill(Color.web("#2e7dd6"));
+                        prev.circle.setScaleX(1.0);
+                        prev.circle.setScaleY(1.0);
+                    }
+                    if (idx == 0) {
+                        sb.append(n.value);
+                    } else {
+                        sb.append(", ").append(n.value);
+                    }
+                    resultLabel.setText(sb.toString());
+                }
+            ));
+        }
+        
+        tl.getKeyFrames().add(new KeyFrame(
+            Duration.millis(stepMs * path.size()),
+            e -> {
+                if (!path.isEmpty()) {
+                    TreeNode last = path.get(path.size() - 1);
+                    last.circle.setFill(Color.web("#2e7dd6"));
+                    last.circle.setScaleX(1.0);
+                    last.circle.setScaleY(1.0);
+                }
+            }
+        ));
+        tl.play();
     }
 
     private void doZoom(double factor, double pivotX, double pivotY) {
@@ -229,6 +884,10 @@ public class ExplorerView {
 
     public String getCode() {
         return codeArea == null ? "" : codeArea.getText();
+    }
+
+    public void setCode(String code) {
+        if (codeArea != null) codeArea.setText(code);
     }
 
     public boolean hasNode(int value) {
@@ -300,21 +959,27 @@ public class ExplorerView {
         resetBtn.setPrefWidth(100);
         resetBtn.setOnAction(e -> resetExecution());
 
-        Button exampleBtn = styledButton("📋 Example", "#8e44ad");
-        exampleBtn.setPrefWidth(120);
-        exampleBtn.setOnAction(e -> loadExample());
-
-        HBox btnRow = new HBox(6, runBtn, stepBtn, resetBtn, exampleBtn);
+        HBox btnRow;
+        if (hideManualControls) {
+            btnRow = new HBox(6, runBtn, stepBtn, resetBtn);
+        } else {
+            Button exampleBtn = styledButton("📋 Example", "#8e44ad");
+            exampleBtn.setPrefWidth(120);
+            exampleBtn.setOnAction(e -> loadExample());
+            btnRow = new HBox(6, runBtn, stepBtn, resetBtn, exampleBtn);
+        }
         btnRow.setAlignment(Pos.CENTER);
         btnRow.setPadding(new Insets(6, 0, 0, 0));
 
         VBox panel = new VBox(6, panelTitle, hint, codeArea, btnRow, outputLabel, outputArea);
         panel.setPadding(new Insets(14));
-        panel.setStyle("-fx-background-color: #121225; -fx-border-color: #4a6fa5; -fx-border-width: 0 0 0 2;");
+        panel.setStyle("-fx-background-color: #080d28; -fx-border-color: #0048ff; -fx-border-width: 0 0 0 2;");
         panel.setPrefWidth(440);
         panel.setMinWidth(440);
 
-        loadExample();
+        if (!hideManualControls) {
+            loadExample();
+        }
 
         return panel;
     }
@@ -384,16 +1049,17 @@ public class ExplorerView {
 
         outputArea.appendText("  ►   " + padLineNum(index + 1) + " │ " + line + "\n");
 
-        String result = executeSingleCommand(line);
-        if (result != null) {
-            outputArea.appendText("      " + padLineNum("") + " └─➤ " + result + "\n");
-        }
-
-        outputArea.positionCaret(outputArea.getLength());
-
-        PauseTransition pause = new PauseTransition(Duration.millis(EXEC_DELAY));
-        pause.setOnFinished(e -> executeLineSequence(lines, index + 1));
-        pause.play();
+        executeSingleCommand(line, (result) -> {
+            if (result != null) {
+                outputArea.appendText("      " + padLineNum("") + " └─➤ " + result + "\n");
+            }
+            outputArea.positionCaret(outputArea.getLength());
+            
+            // Wait a small buffer delay after the command finishes animating
+            PauseTransition pause = new PauseTransition(Duration.millis(300));
+            pause.setOnFinished(e -> executeLineSequence(lines, index + 1));
+            pause.play();
+        });
     }
 
     private void stepNextLine() {
@@ -435,11 +1101,12 @@ public class ExplorerView {
         String line = lines[executingLine].trim();
         outputArea.appendText("  ►   " + padLineNum(executingLine + 1) + " │ " + line + "\n");
 
-        String result = executeSingleCommand(line);
-        if (result != null) {
-            outputArea.appendText("      " + padLineNum("") + " └─➤ " + result + "\n");
-        }
-        outputArea.positionCaret(outputArea.getLength());
+        executeSingleCommand(line, (result) -> {
+            if (result != null) {
+                outputArea.appendText("      " + padLineNum("") + " └─➤ " + result + "\n");
+            }
+            outputArea.positionCaret(outputArea.getLength());
+        });
 
         executingLine++;
         if (executingLine >= lines.length) {
@@ -459,18 +1126,42 @@ public class ExplorerView {
         status("Execution reset");
     }
 
-    private String executeSingleCommand(String line) {
+    private void executeSingleCommand(String line, java.util.function.Consumer<String> callback) {
         Matcher m = METHOD_CALL.matcher(line);
         if (m.matches()) {
             String cmd = m.group(1).toLowerCase();
             String arg = m.group(2);
-            return executeCommand(cmd, arg);
+            executeCommandAsync(cmd, arg, callback);
+            return;
         }
 
         Matcher c = CONSTRUCTOR.matcher(line);
         if (c.matches()) {
             handleClear();
-            return "BinarySearchTree initialized";
+            String lower = line.toLowerCase();
+            if (lower.contains("avltree") || lower.contains("new avl")) {
+                Platform.runLater(() -> {
+                    setTreeModeActive(treeModeButtons[1], new Button[]{treeModeButtons[0], treeModeButtons[2], treeModeButtons[3]});
+                    currentMode = "AVL";
+                    toggleBalanceLabels(true);
+                });
+                callback.accept("AVLTree initialized");
+            } else if (lower.contains("redblack") || lower.contains("rbt")) {
+                Platform.runLater(() -> {
+                    setTreeModeActive(treeModeButtons[2], new Button[]{treeModeButtons[0], treeModeButtons[1], treeModeButtons[3]});
+                    currentMode = "Red-Black";
+                    toggleBalanceLabels(false);
+                });
+                callback.accept("RedBlackTree initialized");
+            } else {
+                Platform.runLater(() -> {
+                    setTreeModeActive(treeModeButtons[0], new Button[]{treeModeButtons[1], treeModeButtons[2], treeModeButtons[3]});
+                    currentMode = "BST";
+                    toggleBalanceLabels(false);
+                });
+                callback.accept("BinarySearchTree initialized");
+            }
+            return;
         }
 
         Matcher sout = SYSOUT.matcher(line);
@@ -479,7 +1170,8 @@ public class ExplorerView {
             if (content.startsWith("\"") && content.endsWith("\"")) {
                 content = content.substring(1, content.length() - 1);
             }
-            return ">> " + content;
+            callback.accept(">> " + content);
+            return;
         }
 
         Matcher arr = ARRAY_DECL.matcher(line);
@@ -495,7 +1187,8 @@ public class ExplorerView {
                 vals[i] = Integer.parseInt(parts[i].trim());
             }
             declaredArrays.put(varName, vals);
-            return "Declared array " + varName + " with " + vals.length + " elements";
+            callback.accept("Declared array " + varName + " with " + vals.length + " elements");
+            return;
         }
 
         Matcher forEach = FOR_EACH.matcher(line);
@@ -504,64 +1197,76 @@ public class ExplorerView {
             String cmd = forEach.group(2).toLowerCase();
             int[] vals = declaredArrays.get(arrayName);
             if (vals == null) {
-                return "❌ Array '" + arrayName + "' not found";
+                callback.accept("❌ Array '" + arrayName + "' not found");
+                return;
             }
-            StringBuilder sb = new StringBuilder();
-            for (int val : vals) {
-                String res = executeCommand(cmd, String.valueOf(val));
-                sb.append(res).append("; ");
-            }
-            return sb.toString().trim();
+            List<Integer> list = new ArrayList<>();
+            for (int val : vals) list.add(val);
+            executeBatchCommands(cmd, list, 0, new StringBuilder(), callback);
+            return;
         }
 
         if (line.startsWith("import ") || line.startsWith("package ") || line.startsWith("public class")
                 || line.startsWith("class ") || line.contains("public static void main")
                 || line.startsWith("public ") || line.startsWith("private ")
                 || line.startsWith("@")) {
-            return "(declaration acknowledged)";
+            callback.accept("(declaration acknowledged)");
+            return;
         }
 
         if (line.startsWith("int ") || line.startsWith("String ") || line.startsWith("var ")) {
-            return "(variable declared)";
+            callback.accept("(variable declared)");
+            return;
         }
 
         status("Unrecognized: " + line);
-        return "⚠ Unrecognized syntax — use tree.insert(n), tree.delete(n), tree.search(n), tree.clear()";
+        callback.accept("⚠ Unrecognized syntax — use tree.insert(n), tree.delete(n), tree.search(n), tree.clear()");
     }
 
-    private String executeCommand(String cmd, String arg) {
+    private void executeBatchCommands(String cmd, List<Integer> vals, int index, StringBuilder sb, java.util.function.Consumer<String> callback) {
+        if (index >= vals.size()) {
+            callback.accept(sb.toString().trim());
+            return;
+        }
+        int val = vals.get(index);
+        executeCommandAsync(cmd, String.valueOf(val), (res) -> {
+            sb.append(res).append("; ");
+            executeBatchCommands(cmd, vals, index + 1, sb, callback);
+        });
+    }
+
+    private void executeCommandAsync(String cmd, String arg, java.util.function.Consumer<String> callback) {
         switch (cmd) {
             case "insert": {
-                if (arg.isEmpty()) return "❌ insert requires a number";
+                if (arg.isEmpty()) { callback.accept("❌ insert requires a number"); return; }
                 int val = Integer.parseInt(arg);
-                insert(val);
-                highlightNode(val, Color.web("#27ae60"), 1200);
-                return "Inserted node " + val;
+                insert(val, () -> callback.accept("Inserted node " + val));
+                break;
             }
             case "delete": {
-                if (arg.isEmpty()) return "❌ delete requires a number";
+                if (arg.isEmpty()) { callback.accept("❌ delete requires a number"); return; }
                 int val = Integer.parseInt(arg);
                 TreeNode target = find(root, val);
                 if (target != null) {
-                    highlightNodeDirect(target, Color.web("#c0392b"), 500);
-                    delete(val);
-                    return "Deleted node " + val;
+                    delete(val, () -> callback.accept("Deleted node " + val));
                 } else {
-                    return "❌ Node " + val + " not found in tree";
+                    callback.accept("❌ Node " + val + " not found in tree");
                 }
+                break;
             }
             case "search": {
-                if (arg.isEmpty()) return "❌ search requires a number";
+                if (arg.isEmpty()) { callback.accept("❌ search requires a number"); return; }
                 int val = Integer.parseInt(arg);
-                search(val);
-                return (find(root, val) != null) ? "✔ Found node " + val : "✘ Node " + val + " not found";
+                search(val, (found) -> callback.accept(found ? "✔ Found node " + val : "✘ Node " + val + " not found"));
+                break;
             }
             case "clear": {
                 handleClear();
-                return "Tree cleared";
+                callback.accept("Tree cleared");
+                break;
             }
             default:
-                return "❌ Unknown method: " + cmd;
+                callback.accept("❌ Unknown method: " + cmd);
         }
     }
 
@@ -581,8 +1286,111 @@ public class ExplorerView {
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  Node Highlighting
+    //  Node Highlighting & Path Sliding Animation
     // ═══════════════════════════════════════════════════════════
+
+    private void animatePointerPath(List<TreeNode> path, double stepMs, Color finalColor, Runnable onFinished) {
+        if (path == null || path.isEmpty()) {
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        resetColors();
+        resetScales(root);
+
+        // Spawn a pointer circle on the canvas
+        javafx.scene.shape.Circle pointer = new javafx.scene.shape.Circle(12);
+        pointer.setFill(Color.web("#f1c40f")); // Standard gold
+        pointer.setEffect(new DropShadow(8, Color.rgb(0, 0, 0, 0.4)));
+
+        // Position initially at the root node's center
+        TreeNode startNode = path.get(0);
+        pointer.setCenterX(startNode.circle.getCenterX());
+        pointer.setCenterY(startNode.circle.getCenterY());
+        canvas.getChildren().add(pointer);
+
+        Timeline tl = new Timeline();
+
+        // Animate node-to-node
+        for (int i = 0; i < path.size(); i++) {
+            TreeNode node = path.get(i);
+            final int idx = i;
+            boolean isLast = (idx == path.size() - 1);
+
+            // KeyFrame at start of each node visit: highlight colors & edge glow
+            tl.getKeyFrames().add(new KeyFrame(
+                Duration.millis(stepMs * idx),
+                e -> {
+                    Color col = isLast ? finalColor : Color.web("#f39c12");
+                    node.circle.setFill(col);
+                    if (node.edgeToParent != null) {
+                        node.edgeToParent.setStroke(Color.web("#f39c12"));
+                        node.edgeToParent.setStrokeWidth(3.5);
+                    }
+                }
+            ));
+
+            // Animate node circle scale-up
+            tl.getKeyFrames().add(new KeyFrame(
+                Duration.millis(stepMs * idx),
+                new KeyValue(node.circle.scaleXProperty(), isLast ? 1.4 : 1.35, Interpolator.EASE_BOTH),
+                new KeyValue(node.circle.scaleYProperty(), isLast ? 1.4 : 1.35, Interpolator.EASE_BOTH)
+            ));
+
+            // If not last, scale back down halfway to the next node visit
+            if (!isLast) {
+                double scaleDownTime = stepMs * idx + Math.min(300, stepMs * 0.5);
+                tl.getKeyFrames().add(new KeyFrame(
+                    Duration.millis(scaleDownTime),
+                    new KeyValue(node.circle.scaleXProperty(), 1.0, Interpolator.EASE_BOTH),
+                    new KeyValue(node.circle.scaleYProperty(), 1.0, Interpolator.EASE_BOTH)
+                ));
+            }
+
+            // Animate pointer translation from previous node to current node
+            if (idx > 0) {
+                tl.getKeyFrames().add(new KeyFrame(
+                    Duration.millis(stepMs * idx),
+                    new KeyValue(pointer.centerXProperty(), node.circle.getCenterX(), Interpolator.EASE_BOTH),
+                    new KeyValue(pointer.centerYProperty(), node.circle.getCenterY(), Interpolator.EASE_BOTH)
+                ));
+            }
+
+            // Animate pointer scale hopping (peak scale at visit start, reset scale midway)
+            tl.getKeyFrames().add(new KeyFrame(
+                Duration.millis(stepMs * idx),
+                new KeyValue(pointer.scaleXProperty(), 1.4, Interpolator.EASE_BOTH),
+                new KeyValue(pointer.scaleYProperty(), 1.4, Interpolator.EASE_BOTH)
+            ));
+            if (!isLast) {
+                tl.getKeyFrames().add(new KeyFrame(
+                    Duration.millis(stepMs * idx + stepMs * 0.5),
+                    new KeyValue(pointer.scaleXProperty(), 1.0, Interpolator.EASE_BOTH),
+                    new KeyValue(pointer.scaleYProperty(), 1.0, Interpolator.EASE_BOTH)
+                ));
+            }
+        }
+
+        // Cleanup and finish callback
+        tl.getKeyFrames().add(new KeyFrame(
+            Duration.millis(stepMs * path.size()),
+            e -> {
+                canvas.getChildren().remove(pointer);
+                if (onFinished != null) onFinished.run();
+            }
+        ));
+
+        // Optional reset color timer at the very end
+        tl.getKeyFrames().add(new KeyFrame(
+            Duration.millis(stepMs * path.size() + stepMs * 2),
+            e -> {
+                resetColors();
+                resetScales(root);
+            }
+        ));
+
+        tl.play();
+    }
 
     private void highlightNode(int value, Color color, double durationMs) {
         TreeNode node = find(root, value);
@@ -591,13 +1399,10 @@ public class ExplorerView {
     }
 
     private void highlightNodeDirect(TreeNode node, Color color, double durationMs) {
-        Color originalColor = Color.web("#2e7dd6");
+        Color originalColor = Color.web(accentColorHex);
         node.circle.setFill(color);
 
-        Glow glow = new Glow(0.8);
-        DropShadow glowShadow = new DropShadow(20, color);
-        glow.setInput(glowShadow);
-        node.circle.setEffect(glow);
+        node.circle.setEffect(new DropShadow(12, Color.rgb(0, 0, 0, 0.5)));
         node.circle.setScaleX(1.3);
         node.circle.setScaleY(1.3);
         node.label.setScaleX(1.2);
@@ -620,62 +1425,120 @@ public class ExplorerView {
     // ═══════════════════════════════════════════════════════════
 
     private void insert(int value) {
+        insert(value, null);
+    }
+
+    private void insert(int value, Runnable onFinished) {
         if (root == null) {
             root = new TreeNode(value);
             // Start the root at X=2000 (center of our virtual 4000x4000 space)
             root.placeAt(2000, ROOT_Y);
             addNodeToCanvas(root);
             status("Inserted root: " + value);
+            if (onFinished != null) onFinished.run();
             return;
         }
 
+        // Trace path to parent
+        List<TreeNode> path = new ArrayList<>();
         TreeNode cur = root;
-        while (true) {
+        TreeNode parent = null;
+        while (cur != null) {
+            path.add(cur);
             if (value == cur.value) {
                 status("Duplicate value " + value + " — not inserted");
+                if (onFinished != null) onFinished.run();
                 return;
             }
-            if (value < cur.value) {
-                if (cur.left == null) {
-                    cur.left = new TreeNode(value);
-                    cur.left.parent = cur;
-                    addNodeToCanvas(cur.left);
-                    break;
-                }
-                cur = cur.left;
-            } else {
-                if (cur.right == null) {
-                    cur.right = new TreeNode(value);
-                    cur.right.parent = cur;
-                    addNodeToCanvas(cur.right);
-                    break;
-                }
-                cur = cur.right;
-            }
+            parent = cur;
+            cur = (value < cur.value) ? cur.left : cur.right;
         }
-        relayout();
-        status("Inserted: " + value);
+
+        double stepMs = 2400.0 / animationSpeed;
+        TreeNode finalParent = parent;
+
+        animatePointerPath(path, stepMs, Color.web("#f39c12"), () -> {
+            TreeNode newNode = new TreeNode(value);
+            newNode.parent = finalParent;
+            if (value < finalParent.value) {
+                finalParent.left = newNode;
+            } else {
+                finalParent.right = newNode;
+            }
+            newNode.placeAt(finalParent.circle.getCenterX(), finalParent.circle.getCenterY());
+            addNodeToCanvas(newNode);
+
+            if (currentMode.equals("AVL")) {
+                balanceTreeAfterInsert(newNode, onFinished);
+            } else if (currentMode.equals("Red-Black")) {
+                balanceTreeAfterInsertRB(newNode, onFinished);
+            } else {
+                relayout();
+                status("Inserted: " + value);
+                if (onFinished != null) onFinished.run();
+            }
+        });
     }
 
     private void delete(int value) {
-        TreeNode node = find(root, value);
-        if (node == null) {
+        delete(value, null);
+    }
+
+    private void delete(int value, Runnable onFinished) {
+        TreeNode target = find(root, value);
+        if (target == null) {
             status("Value " + value + " not found");
+            if (onFinished != null) onFinished.run();
             return;
         }
-        deleteNode(node);
-        relayout();
-        status("Deleted: " + value);
+
+        // Get path to target
+        List<TreeNode> path = new ArrayList<>();
+        TreeNode cur = root;
+        while (cur != null) {
+            path.add(cur);
+            if (value == cur.value) break;
+            cur = (value < cur.value) ? cur.left : cur.right;
+        }
+
+        double stepMs = 2400.0 / animationSpeed;
+        animatePointerPath(path, stepMs, Color.web("#ef4444"), () -> {
+            TreeNode startBalanceNode = null;
+            if (target.left == null && target.right == null) {
+                startBalanceNode = target.parent;
+            } else if (target.left == null || target.right == null) {
+                startBalanceNode = target.parent;
+            } else {
+                TreeNode successor = minNode(target.right);
+                startBalanceNode = successor.parent;
+                if (startBalanceNode == target) {
+                    startBalanceNode = successor;
+                }
+            }
+
+            deleteNode(target);
+
+            if (currentMode.equals("AVL")) {
+                balanceTreeAfterDelete(startBalanceNode, onFinished);
+            } else if (currentMode.equals("Red-Black")) {
+                status("Deleted " + value + ". Rebuilding Red-Black Tree...");
+                convertToRedBlackStepwise(onFinished);
+            } else {
+                relayout();
+                status("Deleted: " + value);
+                if (onFinished != null) onFinished.run();
+            }
+        });
     }
 
     private void deleteNode(TreeNode node) {
         if (node.left == null && node.right == null) {
             removeFromParent(node);
-            removeNodeFromCanvas(node);
+            fadeOutAndRemoveNode(node);
         } else if (node.left == null || node.right == null) {
             TreeNode child = (node.left != null) ? node.left : node.right;
             replaceNode(node, child);
-            removeNodeFromCanvas(node);
+            fadeOutAndRemoveNode(node);
         } else {
             TreeNode successor = minNode(node.right);
             int sVal = successor.value;
@@ -685,7 +1548,40 @@ public class ExplorerView {
         }
     }
 
+    private void fadeOutAndRemoveNode(TreeNode node) {
+        if (node == null) return;
+
+        FadeTransition ftCircle = new FadeTransition(Duration.millis(300), node.circle);
+        ftCircle.setFromValue(1.0);
+        ftCircle.setToValue(0.0);
+
+        FadeTransition ftLabel = new FadeTransition(Duration.millis(300), node.label);
+        ftLabel.setFromValue(1.0);
+        ftLabel.setToValue(0.0);
+
+        FadeTransition ftBalance = new FadeTransition(Duration.millis(300), node.balanceLabel);
+        ftBalance.setFromValue(1.0);
+        ftBalance.setToValue(0.0);
+
+        if (node.edgeToParent != null) {
+            FadeTransition ftEdge = new FadeTransition(Duration.millis(250), node.edgeToParent);
+            ftEdge.setFromValue(1.0);
+            ftEdge.setToValue(0.0);
+            ftEdge.play();
+        }
+
+        ftCircle.setOnFinished(e -> removeNodeFromCanvas(node));
+
+        ftCircle.play();
+        ftLabel.play();
+        ftBalance.play();
+    }
+
     private void search(int value) {
+        search(value, null);
+    }
+
+    private void search(int value, java.util.function.Consumer<Boolean> onFinished) {
         resetColors();
         TreeNode cur = root;
         List<TreeNode> path = new ArrayList<>();
@@ -696,47 +1592,13 @@ public class ExplorerView {
         }
 
         boolean found = (cur != null && cur.value == value);
+        double stepMs = 2400.0 / animationSpeed;
+        Color finalCol = found ? Color.web("#27ae60") : Color.web("#c0392b");
 
-        Timeline tl = new Timeline();
-        for (int i = 0; i < path.size(); i++) {
-            TreeNode n = path.get(i);
-            boolean isLast = (i == path.size() - 1);
-            Color col = isLast
-                    ? (found ? Color.web("#27ae60") : Color.web("#c0392b"))
-                    : Color.web("#f39c12");
-
-            if (isLast) {
-                TreeNode finalNode = n;
-                Color finalCol = col;
-                tl.getKeyFrames().add(new KeyFrame(
-                        Duration.millis(4000 * (i + 1)),
-                        e -> {
-                            finalNode.circle.setFill(finalCol);
-                            Glow glow = new Glow(0.8);
-                            DropShadow glowShadow = new DropShadow(25, finalCol);
-                            glow.setInput(glowShadow);
-                            finalNode.circle.setEffect(glow);
-                            finalNode.circle.setScaleX(1.3);
-                            finalNode.circle.setScaleY(1.3);
-                        }
-                ));
-            } else {
-                tl.getKeyFrames().add(new KeyFrame(
-                        Duration.millis(4000 * (i + 1)),
-                        e -> n.circle.setFill(col)
-                ));
-            }
-        }
-        tl.getKeyFrames().add(new KeyFrame(
-                Duration.millis(4000 * path.size() + 4000),
-                e -> {
-                    resetColors();
-                    resetScales(root);
-                }
-        ));
-        tl.play();
-
-        status(found ? "Found " + value : "Value " + value + " not in tree");
+        animatePointerPath(path, stepMs, finalCol, () -> {
+            status(found ? "Found " + value : "Value " + value + " not in tree");
+            if (onFinished != null) onFinished.accept(found);
+        });
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -781,32 +1643,39 @@ public class ExplorerView {
     private void animateToTargets(TreeNode node) {
         if (node == null) return;
 
-        Timeline tl = new Timeline();
-        tl.getKeyFrames().add(new KeyFrame(Duration.millis(ANIM_MS),
-                new KeyValue(node.circle.centerXProperty(), node.targetX),
-                new KeyValue(node.circle.centerYProperty(), node.targetY)
-        ));
-        tl.setOnFinished(e -> {
-            node.label.setX(node.targetX - labelOffset(node));
-            node.label.setY(node.targetY + 5);
-            updateEdges(root);
-        });
-        tl.play();
+        double startX = node.circle.getCenterX();
+        double startY = node.circle.getCenterY();
+        double targetX = node.targetX;
+        double targetY = node.targetY;
+
+        // Skip animating if it is already at the target coordinates
+        if (Math.abs(startX - targetX) < 0.1 && Math.abs(startY - targetY) < 0.1) {
+            animateToTargets(node.left);
+            animateToTargets(node.right);
+            return;
+        }
+
+        double distance = Math.abs(targetX - startX);
+        double maxHop = Math.min(45.0, distance * 0.25);
+
+        javafx.animation.Transition transition = new javafx.animation.Transition() {
+            {
+                setCycleDuration(Duration.millis(getAnimMs()));
+                setInterpolator(Interpolator.EASE_BOTH);
+            }
+            @Override
+            protected void interpolate(double frac) {
+                double x = startX + (targetX - startX) * frac;
+                double hop = -maxHop * Math.sin(Math.PI * frac);
+                double y = startY + (targetY - startY) * frac + hop;
+                node.circle.setCenterX(x);
+                node.circle.setCenterY(y);
+            }
+        };
+        transition.play();
 
         animateToTargets(node.left);
         animateToTargets(node.right);
-    }
-
-    private void updateEdges(TreeNode node) {
-        if (node == null) return;
-        if (node.edgeToParent != null && node.parent != null) {
-            node.edgeToParent.setStartX(node.parent.circle.getCenterX());
-            node.edgeToParent.setStartY(node.parent.circle.getCenterY() + 24);
-            node.edgeToParent.setEndX(node.circle.getCenterX());
-            node.edgeToParent.setEndY(node.circle.getCenterY() - 24);
-        }
-        updateEdges(node.left);
-        updateEdges(node.right);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -814,20 +1683,49 @@ public class ExplorerView {
     // ═══════════════════════════════════════════════════════════
 
     private void addNodeToCanvas(TreeNode node) {
+        // Bind label position dynamically to node's center so it tracks it in real-time
+        node.label.xProperty().bind(node.circle.centerXProperty().subtract(labelOffset(node)));
+        node.label.yProperty().bind(node.circle.centerYProperty().add(5));
+
+        // Bind balance label position to the top-right of node's circle
+        node.balanceLabel.xProperty().bind(node.circle.centerXProperty().add(18));
+        node.balanceLabel.yProperty().bind(node.circle.centerYProperty().subtract(18));
+        node.balanceLabel.setVisible(currentMode.equals("AVL"));
+
         if (node.parent != null) {
             Line edge = new Line();
             edge.setStroke(Color.web("#4a6fa5"));
             edge.setStrokeWidth(2);
             node.edgeToParent = edge;
+
+            // Bind start coordinates to parent circle center
+            edge.startXProperty().bind(node.parent.circle.centerXProperty());
+            edge.startYProperty().bind(node.parent.circle.centerYProperty().add(24));
+
+            // Bind end coordinates to child circle center (with offset for child node)
+            edge.endXProperty().bind(node.circle.centerXProperty());
+            edge.endYProperty().bind(node.circle.centerYProperty().subtract(24));
+
             canvas.getChildren().add(0, edge);
         }
+        node.circle.setOnMouseEntered(e -> {
+            updateInspector(node);
+            node.circle.setStroke(Color.WHITE);
+            node.circle.setStrokeWidth(3);
+        });
+        node.circle.setOnMouseExited(e -> {
+            clearInspector();
+            node.circle.setStroke(Color.web("#0d3c66"));
+            node.circle.setStrokeWidth(2);
+        });
+
         DropShadow ds = new DropShadow(10, Color.rgb(0, 0, 0, 0.4));
         node.circle.setEffect(ds);
-        canvas.getChildren().addAll(node.circle, node.label);
+        canvas.getChildren().addAll(node.circle, node.label, node.balanceLabel);
     }
 
     private void removeNodeFromCanvas(TreeNode node) {
-        canvas.getChildren().removeAll(node.circle, node.label);
+        canvas.getChildren().removeAll(node.circle, node.label, node.balanceLabel);
         if (node.edgeToParent != null) {
             canvas.getChildren().remove(node.edgeToParent);
         }
@@ -869,6 +1767,19 @@ public class ExplorerView {
                     canvas.getChildren().remove(replacement.edgeToParent);
                 }
                 replacement.edgeToParent = old.edgeToParent;
+                // Rebind edge start to new parent if it exists
+                if (replacement.parent != null) {
+                    replacement.edgeToParent.startXProperty().bind(replacement.parent.circle.centerXProperty());
+                    replacement.edgeToParent.startYProperty().bind(replacement.parent.circle.centerYProperty().add(24));
+                } else {
+                    canvas.getChildren().remove(replacement.edgeToParent);
+                    replacement.edgeToParent = null;
+                }
+                // Rebind edge end to replacement
+                if (replacement.edgeToParent != null) {
+                    replacement.edgeToParent.endXProperty().bind(replacement.circle.centerXProperty());
+                    replacement.edgeToParent.endYProperty().bind(replacement.circle.centerYProperty().subtract(24));
+                }
             }
         }
     }
@@ -883,8 +1794,20 @@ public class ExplorerView {
     }
     private void resetColorsRec(TreeNode n) {
         if (n == null) return;
-        n.circle.setFill(Color.web("#2e7dd6"));
+        if (currentMode.equals("Red-Black")) {
+            n.circle.setFill(n.isRed ? Color.web("#e74c3c") : Color.web("#1e1e24"));
+            n.circle.setStroke(n.isRed ? Color.web("#c0392b") : Color.web("#ffffff"));
+            n.circle.setStrokeWidth(2);
+        } else {
+            n.circle.setFill(Color.web(accentColorHex));
+            n.circle.setStroke(Color.web("#0d3c66"));
+            n.circle.setStrokeWidth(2);
+        }
         n.circle.setEffect(new DropShadow(10, Color.rgb(0, 0, 0, 0.4)));
+        if (n.edgeToParent != null) {
+            n.edgeToParent.setStroke(Color.web("#4a6fa5"));
+            n.edgeToParent.setStrokeWidth(2);
+        }
         resetColorsRec(n.left);
         resetColorsRec(n.right);
     }
@@ -954,7 +1877,7 @@ public class ExplorerView {
         }
         status("Generated random tree with " + count + " nodes");
     }
-    private void handleClear() {
+    public void handleClear() {
         root = null;
         canvas.getChildren().clear();
         status("Tree cleared");
@@ -992,23 +1915,636 @@ public class ExplorerView {
             "-fx-font-size: 13px;" +
             "-fx-font-weight: bold;" +
             "-fx-padding: 8 18;" +
-            "-fx-background-radius: 6;" +
+            "-fx-background-radius: 8;" +
             "-fx-cursor: hand;"
         );
-        btn.setOnMouseEntered(e -> btn.setOpacity(0.85));
+        btn.setOnMouseEntered(e -> btn.setOpacity(0.82));
         btn.setOnMouseExited(e  -> btn.setOpacity(1.0));
         return btn;
     }
 
     private String fieldStyle() {
-        return "-fx-background-color: #1a1a2e;" +
+        return "-fx-background-color: #0a0f2e;" +
                "-fx-text-fill: white;" +
-               "-fx-prompt-text-fill: #7f8c8d;" +
-               "-fx-border-color: #4a6fa5;" +
-               "-fx-border-radius: 4;" +
-               "-fx-background-radius: 4;" +
+               "-fx-prompt-text-fill: #5566aa;" +
+               "-fx-border-color: #0048ff;" +
+               "-fx-border-radius: 6;" +
+               "-fx-background-radius: 6;" +
                "-fx-padding: 8;" +
                "-fx-font-size: 13px;";
+    }
+
+    // ── AVL Logic & Rotations ───────────────────────────────────
+
+    private int height(TreeNode n) {
+        return n == null ? 0 : n.height;
+    }
+
+    private int getBalance(TreeNode n) {
+        return n == null ? 0 : height(n.left) - height(n.right);
+    }
+
+    private void updateHeight(TreeNode n) {
+        if (n != null) {
+            n.height = 1 + Math.max(height(n.left), height(n.right));
+            int bf = getBalance(n);
+            n.balanceLabel.setText((bf >= 0 ? "+" : "") + bf);
+            if (bf < -1 || bf > 1) {
+                n.balanceLabel.setFill(Color.web("#ef4444")); // Red for unbalanced
+            } else {
+                n.balanceLabel.setFill(Color.web("#a0b4ff")); // Cyan/blue for balanced
+            }
+        }
+    }
+
+    private int recomputeHeights(TreeNode n) {
+        if (n == null) return 0;
+        int lh = recomputeHeights(n.left);
+        int rh = recomputeHeights(n.right);
+        n.height = 1 + Math.max(lh, rh);
+        int bf = lh - rh;
+        n.balanceLabel.setText((bf >= 0 ? "+" : "") + bf);
+        if (bf < -1 || bf > 1) {
+            n.balanceLabel.setFill(Color.web("#ef4444"));
+        } else {
+            n.balanceLabel.setFill(Color.web("#a0b4ff"));
+        }
+        return n.height;
+    }
+
+    private TreeNode rotateRight(TreeNode y) {
+        TreeNode x = y.left;
+        TreeNode T2 = x.right;
+
+        // Perform rotation
+        x.right = y;
+        y.left = T2;
+
+        // Update parents
+        x.parent = y.parent;
+        y.parent = x;
+        if (T2 != null) {
+            T2.parent = y;
+        }
+
+        if (x.parent == null) {
+            root = x;
+        } else if (x.parent.left == y) {
+            x.parent.left = x;
+        } else {
+            x.parent.right = x;
+        }
+
+        // Update heights
+        updateHeight(y);
+        updateHeight(x);
+
+        return x;
+    }
+
+    private TreeNode rotateLeft(TreeNode x) {
+        TreeNode y = x.right;
+        TreeNode T2 = y.left;
+
+        // Perform rotation
+        y.left = x;
+        x.right = T2;
+
+        // Update parents
+        y.parent = x.parent;
+        x.parent = y;
+        if (T2 != null) {
+            T2.parent = x;
+        }
+
+        if (y.parent == null) {
+            root = y;
+        } else if (y.parent.left == x) {
+            y.parent.left = y;
+        } else {
+            y.parent.right = y;
+        }
+
+        // Update heights
+        updateHeight(x);
+        updateHeight(y);
+
+        return y;
+    }
+
+    private void rebindEdge(TreeNode node) {
+        if (node == null) return;
+        if (node.edgeToParent != null) {
+            canvas.getChildren().remove(node.edgeToParent);
+            node.edgeToParent = null;
+        }
+        if (node.parent != null) {
+            Line edge = new Line();
+            edge.setStroke(Color.web("#4a6fa5"));
+            edge.setStrokeWidth(2);
+            node.edgeToParent = edge;
+
+            edge.startXProperty().bind(node.parent.circle.centerXProperty());
+            edge.startYProperty().bind(node.parent.circle.centerYProperty().add(24));
+            edge.endXProperty().bind(node.circle.centerXProperty());
+            edge.endYProperty().bind(node.circle.centerYProperty().subtract(24));
+
+            canvas.getChildren().add(0, edge);
+        }
+    }
+
+    private void rebindEdgesRec(TreeNode n) {
+        if (n == null) return;
+        rebindEdge(n);
+        rebindEdgesRec(n.left);
+        rebindEdgesRec(n.right);
+    }
+
+    private void toggleBalanceLabels(boolean visible) {
+        toggleBalanceLabelsRec(root, visible);
+    }
+
+    private void toggleBalanceLabelsRec(TreeNode n, boolean visible) {
+        if (n == null) return;
+        n.balanceLabel.setVisible(visible);
+        toggleBalanceLabelsRec(n.left, visible);
+        toggleBalanceLabelsRec(n.right, visible);
+    }
+
+    private void highlightRotationNodes(TreeNode node1, TreeNode node2, TreeNode node3) {
+        resetColors();
+        if (node1 != null) {
+            node1.circle.setFill(Color.web("#e67e22")); // Orange for unbalanced root
+            node1.circle.setScaleX(1.15);
+            node1.circle.setScaleY(1.15);
+        }
+        if (node2 != null) {
+            node2.circle.setFill(Color.web("#9b5de5")); // Violet for pivot child
+            node2.circle.setScaleX(1.15);
+            node2.circle.setScaleY(1.15);
+        }
+        if (node3 != null) {
+            node3.circle.setFill(Color.web("#f1c40f")); // Yellow for grandchild
+            node3.circle.setScaleX(1.15);
+            node3.circle.setScaleY(1.15);
+        }
+    }
+
+    private void checkAndRotateStep(TreeNode curr, Runnable onFinished) {
+        if (curr == null) {
+            recomputeHeights(root);
+            rebindEdgesRec(root);
+            relayout();
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        updateHeight(curr);
+        int balance = getBalance(curr);
+
+        if (balance >= -1 && balance <= 1) {
+            checkAndRotateStep(curr.parent, onFinished);
+            return;
+        }
+
+        // Imbalance detected
+        TreeNode child = null;
+        TreeNode grandchild = null;
+        String caseName = "";
+
+        if (balance > 1) {
+            child = curr.left;
+            if (getBalance(child) >= 0) {
+                caseName = "Left-Left Case (Single Right Rotation)";
+                grandchild = child.left;
+            } else {
+                caseName = "Left-Right Case (Double Rotation)";
+                grandchild = child.right;
+            }
+        } else {
+            child = curr.right;
+            if (getBalance(child) <= 0) {
+                caseName = "Right-Right Case (Single Left Rotation)";
+                grandchild = child.right;
+            } else {
+                caseName = "Right-Left Case (Double Rotation)";
+                grandchild = child.left;
+            }
+        }
+
+        TreeNode finalChild = child;
+        TreeNode finalGrandchild = grandchild;
+        String finalCaseName = caseName;
+        int unbalancedVal = curr.value;
+
+        status("⚠️ Imbalance detected at " + unbalancedVal + " (BF = " + balance + "). " + finalCaseName + ".");
+        highlightRotationNodes(curr, child, grandchild);
+
+        double delayMs = getExecDelay();
+        PauseTransition pause = new PauseTransition(Duration.millis(delayMs));
+        pause.setOnFinished(e -> {
+            TreeNode newSubtreeRoot = null;
+            if (balance > 1) {
+                if (getBalance(finalChild) >= 0) {
+                    newSubtreeRoot = rotateRight(curr);
+                } else {
+                    curr.left = rotateLeft(finalChild);
+                    rebindEdgesRec(root);
+                    relayout();
+
+                    PauseTransition secondPause = new PauseTransition(Duration.millis(delayMs));
+                    TreeNode finalCurr = curr;
+                    secondPause.setOnFinished(e2 -> {
+                        status("⚠️ Left-Right Case: Performing final Right Rotation at " + unbalancedVal + ".");
+                        highlightRotationNodes(finalCurr, finalCurr.left, finalCurr.left.left);
+                        PauseTransition thirdPause = new PauseTransition(Duration.millis(delayMs));
+                        thirdPause.setOnFinished(e3 -> {
+                            TreeNode rotNode = rotateRight(finalCurr);
+                            rebindEdgesRec(root);
+                            relayout();
+                            checkAndRotateStep(rotNode.parent, onFinished);
+                        });
+                        thirdPause.play();
+                    });
+                    secondPause.play();
+                    return;
+                }
+            } else {
+                if (getBalance(finalChild) <= 0) {
+                    newSubtreeRoot = rotateLeft(curr);
+                } else {
+                    curr.right = rotateRight(finalChild);
+                    rebindEdgesRec(root);
+                    relayout();
+
+                    PauseTransition secondPause = new PauseTransition(Duration.millis(delayMs));
+                    TreeNode finalCurr = curr;
+                    secondPause.setOnFinished(e2 -> {
+                        status("⚠️ Right-Left Case: Performing final Left Rotation at " + unbalancedVal + ".");
+                        highlightRotationNodes(finalCurr, finalCurr.right, finalCurr.right.right);
+                        PauseTransition thirdPause = new PauseTransition(Duration.millis(delayMs));
+                        thirdPause.setOnFinished(e3 -> {
+                            TreeNode rotNode = rotateLeft(finalCurr);
+                            rebindEdgesRec(root);
+                            relayout();
+                            checkAndRotateStep(rotNode.parent, onFinished);
+                        });
+                        thirdPause.play();
+                    });
+                    secondPause.play();
+                    return;
+                }
+            }
+
+            rebindEdgesRec(root);
+            relayout();
+            checkAndRotateStep(newSubtreeRoot.parent, onFinished);
+        });
+        pause.play();
+    }
+
+    private void balanceTreeAfterInsert(TreeNode newNode, Runnable onFinished) {
+        checkAndRotateStep(newNode.parent, onFinished);
+    }
+
+    private void balanceTreeAfterDelete(TreeNode startNode, Runnable onFinished) {
+        checkAndRotateStep(startNode, onFinished);
+    }
+
+    private void balanceTreeAfterInsertRB(TreeNode newNode, Runnable onFinished) {
+        checkAndBalanceRBStep(newNode, onFinished);
+    }
+
+    private void highlightRBNodes(TreeNode n, TreeNode p, TreeNode u, TreeNode g) {
+        resetColors();
+        if (n != null) {
+            n.circle.setStroke(Color.web("#f1c40f")); // Gold for child
+            n.circle.setStrokeWidth(3.5);
+        }
+        if (p != null) {
+            p.circle.setStroke(Color.web("#f1c40f")); // Gold for parent
+            p.circle.setStrokeWidth(3.5);
+        }
+        if (u != null) {
+            u.circle.setStroke(Color.web("#2ecc71")); // Green for uncle
+            u.circle.setStrokeWidth(3.5);
+        }
+        if (g != null) {
+            g.circle.setStroke(Color.web("#9b5de5")); // Purple for grandparent
+            g.circle.setStrokeWidth(3.5);
+        }
+    }
+
+    private void checkAndBalanceRBStep(TreeNode n, Runnable onFinished) {
+        if (n == null) {
+            if (root != null && root.isRed) {
+                root.isRed = false;
+                resetColors();
+            }
+            rebindEdgesRec(root);
+            relayout();
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        if (root != null && root.isRed) {
+            root.isRed = false;
+            resetColors();
+        }
+
+        // Check for double red violation
+        if (n.isRed && n.parent != null && n.parent.isRed) {
+            TreeNode p = n.parent;
+            TreeNode g = p.parent; // Must exist since p is Red and root is always Black
+
+            if (g == null) {
+                p.isRed = false;
+                resetColors();
+                checkAndBalanceRBStep(p, onFinished);
+                return;
+            }
+
+            TreeNode u = (g.left == p) ? g.right : g.left;
+
+            // Case 1: Uncle is RED
+            if (u != null && u.isRed) {
+                status("⚠️ Double Red Violation (Parent " + p.value + " & Uncle " + u.value + "). Recoloring...");
+                highlightRBNodes(n, p, u, g);
+
+                double delayMs = getExecDelay();
+                PauseTransition pause = new PauseTransition(Duration.millis(delayMs));
+                pause.setOnFinished(e -> {
+                    p.isRed = false;
+                    u.isRed = false;
+                    g.isRed = true;
+                    resetColors();
+                    checkAndBalanceRBStep(g, onFinished);
+                });
+                pause.play();
+                return;
+            }
+
+            // Case 2: Uncle is BLACK or null -> Rotate & Recolor
+            status("⚠️ Double Red Violation (Black/Null Uncle). Rotating and recoloring...");
+            highlightRBNodes(n, p, u, g);
+
+            double delayMs = getExecDelay();
+            PauseTransition pause = new PauseTransition(Duration.millis(delayMs));
+            pause.setOnFinished(e -> {
+                if (g.left == p) {
+                    if (p.right == n) {
+                        // LR Case
+                        status("⚠️ Left-Right Case: Rotating left at " + p.value);
+                        rotateLeft(p);
+                        rebindEdgesRec(root);
+                        relayout();
+
+                        PauseTransition pause2 = new PauseTransition(Duration.millis(delayMs));
+                        pause2.setOnFinished(e2 -> {
+                            status("⚠️ Left-Right Case: Final right rotation at " + g.value + " & recoloring.");
+                            TreeNode rotNode = rotateRight(g);
+                            rotNode.isRed = false;
+                            if (rotNode.left != null) rotNode.left.isRed = true;
+                            if (rotNode.right != null) rotNode.right.isRed = true;
+                            resetColors();
+                            rebindEdgesRec(root);
+                            relayout();
+                            checkAndBalanceRBStep(rotNode.parent, onFinished);
+                        });
+                        pause2.play();
+                    } else {
+                        // LL Case
+                        status("⚠️ Left-Left Case: Rotating right at " + g.value + " & recoloring.");
+                        TreeNode rotNode = rotateRight(g);
+                        rotNode.isRed = false;
+                        if (rotNode.left != null) rotNode.left.isRed = true;
+                        if (rotNode.right != null) rotNode.right.isRed = true;
+                        resetColors();
+                        rebindEdgesRec(root);
+                        relayout();
+                        checkAndBalanceRBStep(rotNode.parent, onFinished);
+                    }
+                } else {
+                    if (p.left == n) {
+                        // RL Case
+                        status("⚠️ Right-Left Case: Rotating right at " + p.value);
+                        rotateRight(p);
+                        rebindEdgesRec(root);
+                        relayout();
+
+                        PauseTransition pause2 = new PauseTransition(Duration.millis(delayMs));
+                        pause2.setOnFinished(e2 -> {
+                            status("⚠️ Right-Left Case: Final left rotation at " + g.value + " & recoloring.");
+                            TreeNode rotNode = rotateLeft(g);
+                            rotNode.isRed = false;
+                            if (rotNode.left != null) rotNode.left.isRed = true;
+                            if (rotNode.right != null) rotNode.right.isRed = true;
+                            resetColors();
+                            rebindEdgesRec(root);
+                            relayout();
+                            checkAndBalanceRBStep(rotNode.parent, onFinished);
+                        });
+                        pause2.play();
+                    } else {
+                        // RR Case
+                        status("⚠️ Right-Right Case: Rotating left at " + g.value + " & recoloring.");
+                        TreeNode rotNode = rotateLeft(g);
+                        rotNode.isRed = false;
+                        if (rotNode.left != null) rotNode.left.isRed = true;
+                        if (rotNode.right != null) rotNode.right.isRed = true;
+                        resetColors();
+                        rebindEdgesRec(root);
+                        relayout();
+                        checkAndBalanceRBStep(rotNode.parent, onFinished);
+                    }
+                }
+            });
+            pause.play();
+            return;
+        }
+
+        // No violation, move up to parent
+        checkAndBalanceRBStep(n.parent, onFinished);
+    }
+
+    private void stepwiseBalanceBST(Runnable onFinished) {
+        recomputeHeights(root);
+        TreeNode unbalanced = findFirstUnbalanced(root);
+        if (unbalanced == null) {
+            status("Tree is fully balanced!");
+            rebindEdgesRec(root);
+            relayout();
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        checkAndRotateStep(unbalanced, () -> {
+            stepwiseBalanceBST(onFinished);
+        });
+    }
+
+    private TreeNode findFirstUnbalanced(TreeNode n) {
+        if (n == null) return null;
+        TreeNode leftRes = findFirstUnbalanced(n.left);
+        if (leftRes != null) return leftRes;
+
+        TreeNode rightRes = findFirstUnbalanced(n.right);
+        if (rightRes != null) return rightRes;
+
+        int bf = getBalance(n);
+        if (bf < -1 || bf > 1) return n;
+
+        return null;
+    }
+
+    // ── Node Inspector Helpers ──────────────────────────────────
+
+    private int getDepth(TreeNode node) {
+        int depth = 0;
+        TreeNode cur = node;
+        while (cur.parent != null) {
+            depth++;
+            cur = cur.parent;
+        }
+        return depth;
+    }
+
+    private VBox buildInspectorCard() {
+        VBox card = new VBox(4);
+        card.setPadding(new Insets(12));
+        card.setPrefSize(180, 155);
+        card.setMinSize(180, 155);
+        card.setMaxSize(180, 155);
+        card.setStyle(
+            "-fx-background-color: rgba(12, 18, 54, 0.85);" +
+            "-fx-background-radius: 8;" +
+            "-fx-border-color: #1e2c56;" +
+            "-fx-border-width: 1.5;" +
+            "-fx-border-radius: 8;"
+        );
+
+        inspTitle = new Label("🌳 NODE INSPECTOR");
+        inspTitle.setFont(Font.font("Segoe UI", FontWeight.BOLD, 10));
+        inspTitle.setTextFill(Color.web(Theme.TEAL));
+        inspTitle.setStyle("");
+
+        inspValue = new Label("Hover over a node");
+        inspValue.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
+        inspValue.setTextFill(Color.WHITE);
+
+        inspHeight = new Label("to inspect tree properties");
+        inspHeight.setFont(Font.font("Segoe UI", 12));
+        inspHeight.setTextFill(Color.web("#7a90c0"));
+
+        inspDepth = new Label("and node details.");
+        inspDepth.setFont(Font.font("Segoe UI", 12));
+        inspDepth.setTextFill(Color.web("#7a90c0"));
+
+        inspBF = new Label("");
+        inspBF.setFont(Font.font("Segoe UI", 12));
+        inspBF.setTextFill(Color.web("#7a90c0"));
+
+        inspParent = new Label("");
+        inspParent.setFont(Font.font("Segoe UI", 12));
+        inspParent.setTextFill(Color.web("#7a90c0"));
+
+        inspChildren = new Label("");
+        inspChildren.setFont(Font.font("Segoe UI", 12));
+        inspChildren.setTextFill(Color.web("#7a90c0"));
+
+        card.getChildren().addAll(inspTitle, inspValue, inspHeight, inspDepth, inspBF, inspParent, inspChildren);
+        return card;
+    }
+
+    private void updateInspector(TreeNode node) {
+        if (node == null) {
+            clearInspector();
+            return;
+        }
+
+        inspectorCard.setStyle(
+            "-fx-background-color: rgba(12, 18, 54, 0.95);" +
+            "-fx-background-radius: 8;" +
+            "-fx-border-color: " + accentColorHex + ";" +
+            "-fx-border-width: 1.5;" +
+            "-fx-border-radius: 8;"
+        );
+
+        inspValue.setText("Value: " + node.value);
+        inspHeight.setText("Height: " + height(node));
+        inspDepth.setText("Depth: " + getDepth(node));
+
+        int bf = getBalance(node);
+        if (currentMode.equals("Red-Black")) {
+            inspBF.setText("Color: " + (node.isRed ? "RED 🔴" : "BLACK ⚫"));
+        } else {
+            inspBF.setText("Balance Factor: " + (bf >= 0 ? "+" : "") + bf);
+        }
+        inspParent.setText("Parent: " + (node.parent != null ? String.valueOf(node.parent.value) : "None"));
+
+        String childrenStr = "Children: ";
+        if (node.left == null && node.right == null) {
+            childrenStr += "None";
+        } else {
+            childrenStr += (node.left != null ? "L:" + node.left.value : "") +
+                           (node.left != null && node.right != null ? ", " : "") +
+                           (node.right != null ? "R:" + node.right.value : "");
+        }
+        inspChildren.setText(childrenStr);
+    }
+
+    private void clearInspector() {
+        if (inspectorCard == null) return;
+
+        inspectorCard.setStyle(
+            "-fx-background-color: rgba(12, 18, 54, 0.85);" +
+            "-fx-background-radius: 8;" +
+            "-fx-border-color: #1e2c56;" +
+            "-fx-border-width: 1.5;" +
+            "-fx-border-radius: 8;"
+        );
+
+        inspValue.setText("Hover over a node");
+        inspHeight.setText("to inspect tree properties");
+        inspDepth.setText("and node details.");
+        inspBF.setText("");
+        inspParent.setText("");
+        inspChildren.setText("");
+    }
+
+    private void convertToRedBlackStepwise(Runnable onFinished) {
+        java.util.List<Integer> values = new ArrayList<>();
+        collectValuesInOrder(root, values);
+
+        canvas.getChildren().clear();
+        root = null;
+        clearInspector();
+
+        if (values.isEmpty()) {
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        insertSequentialRB(values, 0, onFinished);
+    }
+
+    private void insertSequentialRB(java.util.List<Integer> values, int idx, Runnable onFinished) {
+        if (idx >= values.size()) {
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+        insert(values.get(idx), () -> {
+            PauseTransition nextPause = new PauseTransition(Duration.millis(getExecDelay()));
+            nextPause.setOnFinished(e -> insertSequentialRB(values, idx + 1, onFinished));
+            nextPause.play();
+        });
+    }
+
+    private void collectValuesInOrder(TreeNode n, java.util.List<Integer> list) {
+        if (n == null) return;
+        collectValuesInOrder(n.left, list);
+        list.add(n.value);
+        collectValuesInOrder(n.right, list);
     }
 
     // ── Main ───────────────────────────────────────────────────
