@@ -166,27 +166,7 @@ public class DashboardView {
         VBox stat2 = createStatCard("XP Earned", (solved * 100) + " XP", Theme.SUCCESS);
         VBox stat3 = createStatCard("Completed", solved + " / " + totalProblems, Theme.WARN);
         
-        int violations = App.db.getViolationCount(user);
-        long lockoutTime = App.db.getLockoutTimestamp(user);
-        long elapsed = System.currentTimeMillis() - lockoutTime;
-        long cooldownMs = 5 * 60 * 1000;
-        
-        String integrityVal;
-        String integrityColor;
-        
-        if (elapsed < cooldownMs) {
-            long remainingSec = (cooldownMs - elapsed) / 1000;
-            long min = remainingSec / 60;
-            long sec = remainingSec % 60;
-            integrityVal = String.format("⚠️ LOCKED (%02d:%02d)", min, sec);
-            integrityColor = Theme.DANGER;
-        } else {
-            integrityVal = violations == 0 ? "🛡️ Integrity: OK" : "⚠️ " + violations + (violations > 1 ? " Violations" : " Violation");
-            integrityColor = violations == 0 ? Theme.SUCCESS : Theme.DANGER;
-        }
-        VBox stat4 = createStatCard("Focus Integrity", integrityVal, integrityColor);
-
-        statsRow.getChildren().addAll(stat1, stat2, stat3, stat4);
+        statsRow.getChildren().addAll(stat1, stat2, stat3);
 
         // ── Continue / Reset row ──────────────────────────────────────────
         HBox quickRow = new HBox(14);
@@ -205,6 +185,32 @@ public class DashboardView {
 
         Button resetBtn = makeResetButton();
         quickRow.getChildren().add(resetBtn);
+
+        // ── Class Join Row ────────────────────────────────────────────────
+        HBox joinClassBox = new HBox(12);
+        joinClassBox.setAlignment(Pos.CENTER);
+        
+        String currentClass = App.db.getClassCode(user);
+        if (currentClass == null || currentClass.isEmpty()) {
+            TextField classCodeInput = new TextField();
+            classCodeInput.setPromptText("Enter Teacher Class Code");
+            classCodeInput.setStyle("-fx-background-color: #1e2c56; -fx-text-fill: white; -fx-padding: 8 12; -fx-background-radius: 6; -fx-border-color: #3b82f6; -fx-border-radius: 6;");
+            
+            Button joinBtn = styledBtn("Join Class", Theme.PRIMARY);
+            joinBtn.setOnAction(e -> {
+                String code = classCodeInput.getText().trim();
+                if (!code.isEmpty()) {
+                    App.db.setClassCode(code);
+                    App.changeScene(new DashboardView().getView());
+                }
+            });
+            joinClassBox.getChildren().addAll(classCodeInput, joinBtn);
+        } else {
+            Label classLbl = new Label("Joined Class: " + currentClass);
+            classLbl.setFont(Font.font("Arial", FontWeight.BOLD, 14));
+            classLbl.setTextFill(Color.web(Theme.ACCENT));
+            joinClassBox.getChildren().add(classLbl);
+        }
 
         // ── Mode Cards ────────────────────────────────────────────────────
         HBox modes = new HBox(30);
@@ -226,7 +232,75 @@ public class DashboardView {
 
         modes.getChildren().addAll(expCard, chaCard);
 
-        center.getChildren().addAll(hello, subtitle, progressBox, statsRow, quickRow, modes);
+        center.getChildren().addAll(hello, subtitle, progressBox, statsRow, quickRow, joinClassBox, modes);
+
+        if (currentClass != null && !currentClass.isEmpty()) {
+            java.util.List<DatabaseManager.CustomTask> customTasks = App.db.getCustomTasksForClass(currentClass);
+            if (!customTasks.isEmpty()) {
+                VBox assignmentsBox = new VBox(14);
+                assignmentsBox.setAlignment(Pos.CENTER);
+                assignmentsBox.setStyle("-fx-padding: 30 0 0 0;");
+                
+                Label assignmentsTitle = new Label("Class Assignments");
+                assignmentsTitle.setFont(Font.font("Segoe UI", FontWeight.BOLD, 20));
+                assignmentsTitle.setTextFill(Color.WHITE);
+                
+                HBox assignmentsList = new HBox(16);
+                assignmentsList.setAlignment(Pos.CENTER);
+                
+                for (DatabaseManager.CustomTask task : customTasks) {
+                    boolean submitted = App.db.getAnswer(user, task.id) != null;
+                    Integer grade = App.db.getGrade(user, task.id);
+                    boolean rejected = grade != null && grade == -1;
+                    
+                    String statusText;
+                    String statusColor;
+                    if (grade != null && !rejected) {
+                        statusText = "Score: " + grade + "/100";
+                        statusColor = Theme.SUCCESS;
+                    } else if (rejected) {
+                        statusText = "Needs Revision";
+                        statusColor = Theme.DANGER;
+                    } else if (submitted) {
+                        statusText = "Pending Grading";
+                        statusColor = Theme.WARN;
+                    } else {
+                        statusText = "Unsolved";
+                        statusColor = Theme.TEXT_MUTED;
+                    }
+                    
+                    VBox taskCard = createModeCard(
+                        "📝 " + task.title,
+                        statusText,
+                        (grade != null && !rejected) ? "#145c2f" : (rejected ? "#5c1414" : "#1e2c56"),
+                        (grade != null && !rejected) ? "#1e824c" : (rejected ? "#821e1e" : "#2a3f7a")
+                    );
+                    
+                    if (grade == null || rejected) {
+                        taskCard.setOnMouseClicked(e -> App.changeScene(new ChallengeView(task.id).getView()));
+                    } else {
+                        taskCard.setOnMouseClicked(e -> {
+                            javafx.scene.control.Alert a = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.INFORMATION);
+                            a.setTitle("Graded Assignment");
+                            a.setHeaderText(task.title);
+                            a.setContentText("Your final score is: " + grade + "/100\n\nCode is archived.");
+                            a.showAndWait();
+                        });
+                    }
+                    assignmentsList.getChildren().add(taskCard);
+                }
+                
+                ScrollPane tasksScroll = new ScrollPane(assignmentsList);
+                tasksScroll.setFitToHeight(true);
+                tasksScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+                tasksScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+                tasksScroll.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
+                
+                assignmentsBox.getChildren().addAll(assignmentsTitle, tasksScroll);
+                center.getChildren().add(assignmentsBox);
+            }
+        }
+
         root.setCenter(centerScroll);
 
         rootStack.getChildren().addAll(bgPane, root);

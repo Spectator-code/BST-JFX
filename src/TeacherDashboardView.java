@@ -31,6 +31,7 @@ public class TeacherDashboardView {
     private Label detailStudentRank;
     private Label detailStudentXP;
     private Label detailStudentViolations;
+    private Label detailStudentTotalScore;
     private GridPane solvedGrid;
     private HBox statsRow;
     private Label solvedTitle;
@@ -60,17 +61,54 @@ public class TeacherDashboardView {
         userLabel.setFont(Font.font("Arial", 14));
         userLabel.setStyle("-fx-padding: 0 18 0 0;");
 
+        List<String> teacherClasses = App.db.getTeacherClasses(user);
+        
+        ComboBox<String> classDropdown = new ComboBox<>();
+        classDropdown.getItems().addAll(teacherClasses);
+        if (!teacherClasses.isEmpty()) {
+            classDropdown.getSelectionModel().selectFirst();
+        }
+        classDropdown.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + ";" +
+            "-fx-text-fill: white;" +
+            "-fx-font-family: 'Arial';" +
+            "-fx-font-weight: bold;" +
+            "-fx-border-color: " + Theme.PRIMARY + ";" +
+            "-fx-border-radius: 4;" +
+            "-fx-background-radius: 4;"
+        );
+        
+        Button newClassBtn = styledBtn("➕", Theme.ACCENT);
+        newClassBtn.setStyle(newClassBtn.getStyle() + " -fx-padding: 4 8;");
+        newClassBtn.setOnAction(e -> showNewClassDialog(user, classDropdown));
+
+        Button settingsBtn = styledBtn("⚙", Theme.WARN);
+        settingsBtn.setStyle(settingsBtn.getStyle() + " -fx-padding: 4 8;");
+        settingsBtn.setOnAction(e -> showSettingsDialog(classDropdown.getValue()));
+
+        Button createTaskBtn = styledBtn("📝", Theme.SUCCESS);
+        createTaskBtn.setStyle(createTaskBtn.getStyle() + " -fx-padding: 4 8;");
+        createTaskBtn.setOnAction(e -> showCreateTaskDialog(classDropdown.getValue()));
+
+        HBox classControls = new HBox(6, new Label("Class: "), classDropdown, newClassBtn, settingsBtn, createTaskBtn);
+        classControls.setAlignment(Pos.CENTER_LEFT);
+        classControls.lookupAll(".label").forEach(l -> ((Label)l).setTextFill(Color.web(Theme.TEXT_LIGHT)));
+        classControls.setStyle("-fx-padding: 0 20 0 0;");
+
         Button inviteBtn = styledBtn("✉  Invite Student", Theme.SUCCESS);
         inviteBtn.setOnAction(e -> showInviteStudentDialog());
 
         Button logoutBtn = styledBtn("Logout", Theme.DANGER);
         logoutBtn.setOnAction(e -> confirmLogout());
 
-        nav.getChildren().addAll(brand, spacer, userLabel, inviteBtn, logoutBtn);
+        nav.getChildren().addAll(brand, spacer, classControls, userLabel, inviteBtn, logoutBtn);
         root.setTop(nav);
 
         // ── Load Student Data ─────────────────────────────────────────────
-        allStudents = App.db.getAllStudentsInfo();
+        classDropdown.valueProperty().addListener((obs, oldVal, newVal) -> {
+            loadStudentsForClass(newVal);
+        });
+        loadStudentsForClass(classDropdown.getValue());
 
         // ── Split Pane Layout ─────────────────────────────────────────────
         SplitPane splitPane = new SplitPane();
@@ -201,7 +239,12 @@ public class TeacherDashboardView {
         detailStudentViolations.setTextFill(Color.web(Theme.SUCCESS));
         detailStudentViolations.setStyle("-fx-background-color: #27ae601c; -fx-border-color: #27ae6050; -fx-border-radius: 8; -fx-padding: 4 12;");
 
-        detailStats.getChildren().addAll(detailStudentRank, detailStudentXP, detailStudentViolations);
+        detailStudentTotalScore = new Label("Total Score: 0");
+        detailStudentTotalScore.setFont(Font.font("Segoe UI", FontWeight.BOLD, 13));
+        detailStudentTotalScore.setTextFill(Color.web(Theme.PRIMARY2));
+        detailStudentTotalScore.setStyle("-fx-background-color: #0d47a11c; -fx-border-color: #0d47a150; -fx-border-radius: 8; -fx-padding: 4 12;");
+
+        detailStats.getChildren().addAll(detailStudentRank, detailStudentXP, detailStudentViolations, detailStudentTotalScore);
 
         solvedTitle = new Label("Challenge Tracker (Solved problems are highlighted in green)");
         solvedTitle.setFont(Font.font("Arial", FontWeight.BOLD, 13));
@@ -438,7 +481,6 @@ public class TeacherDashboardView {
         if (detailsContent.getChildren().size() > 2) {
             detailsContent.getChildren().remove(2, detailsContent.getChildren().size());
         }
-        detailsContent.getChildren().addAll(actionRow, new Separator(), solvedTitle, solvedGrid);
 
         // Build the checkmark grid of all 20 challenges
         solvedGrid.getChildren().clear();
@@ -466,8 +508,10 @@ public class TeacherDashboardView {
                     "-fx-border-width: 1;" +
                     "-fx-border-radius: 6;" +
                     "-fx-background-radius: 6;" +
-                    "-fx-padding: 8 10;"
+                    "-fx-padding: 8 10;" +
+                    "-fx-cursor: hand;"
                 );
+                badge.setOnMouseClicked(e -> showAnswerCode(student.username, p.id, p.title));
             } else {
                 badge.setTextFill(Color.web(Theme.TEXT_LIGHT + "88"));
                 badge.setStyle(
@@ -484,6 +528,91 @@ public class TeacherDashboardView {
             int col = i % cols;
             solvedGrid.add(badge, col, row);
         }
+
+        Label customTitle = new Label("Class Assignments");
+        customTitle.setFont(Font.font("Arial", FontWeight.BOLD, 13));
+        customTitle.setTextFill(Color.web(Theme.TEXT_MUTED));
+
+        GridPane customGrid = new GridPane();
+        customGrid.setHgap(10);
+        customGrid.setVgap(10);
+        customGrid.setPadding(new Insets(10, 0, 10, 0));
+
+        List<DatabaseManager.CustomTask> tasks = App.db.getCustomTasksForClass(student.getClassCode());
+        for (int i = 0; i < tasks.size(); i++) {
+            DatabaseManager.CustomTask task = tasks.get(i);
+            boolean submitted = App.db.getAnswer(student.username, task.id) != null;
+            Integer grade = App.db.getGrade(student.username, task.id);
+            boolean rejected = grade != null && grade == -1;
+
+            Label badge = new Label("T" + task.id + (grade != null && !rejected ? " ✅" : (rejected ? " 🔁" : (submitted ? " 📝" : " ❌"))));
+            badge.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+            badge.setWrapText(false);
+            badge.setAlignment(Pos.CENTER);
+            badge.setPrefWidth(90);
+            badge.setTooltip(new Tooltip(task.title));
+
+            if (grade != null && !rejected) {
+                badge.setTextFill(Color.web(Theme.SUCCESS));
+                badge.setStyle("-fx-background-color: " + Theme.SUCCESS + "14; -fx-border-color: " + Theme.SUCCESS + "aa; -fx-border-width: 1; -fx-border-radius: 6; -fx-background-radius: 6; -fx-padding: 8 10; -fx-cursor: hand;");
+            } else if (rejected) {
+                badge.setTextFill(Color.web(Theme.DANGER));
+                badge.setStyle("-fx-background-color: " + Theme.DANGER + "14; -fx-border-color: " + Theme.DANGER + "aa; -fx-border-width: 1; -fx-border-radius: 6; -fx-background-radius: 6; -fx-padding: 8 10; -fx-cursor: hand;");
+            } else if (submitted) {
+                badge.setTextFill(Color.web(Theme.WARN));
+                badge.setStyle("-fx-background-color: " + Theme.WARN + "14; -fx-border-color: " + Theme.WARN + "aa; -fx-border-width: 1; -fx-border-radius: 6; -fx-background-radius: 6; -fx-padding: 8 10; -fx-cursor: hand;");
+            } else {
+                badge.setTextFill(Color.web(Theme.TEXT_LIGHT + "88"));
+                badge.setStyle("-fx-background-color: " + Theme.NAV_BG + "22; -fx-border-color: " + Theme.BORDER + "aa; -fx-border-width: 1; -fx-border-radius: 6; -fx-background-radius: 6; -fx-padding: 8 10;");
+            }
+
+            if (submitted || rejected) {
+                badge.setOnMouseClicked(e -> showGradingDialog(student.username, task));
+            }
+
+            customGrid.add(badge, i % cols, i / cols);
+        }
+
+        detailsContent.getChildren().addAll(actionRow, new Separator(), solvedTitle, solvedGrid, new Separator(), customTitle, customGrid);
+        
+        // Update total score
+        detailStudentTotalScore.setText("Total Score: " + App.db.getTotalScore(student.username, student.getClassCode()));
+    }
+
+    private void showAnswerCode(String username, int problemId, String problemTitle) {
+        String code = App.db.getAnswer(username, problemId);
+        
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle("Student Answer");
+        alert.setHeaderText("Problem " + problemId + ": " + problemTitle + "\nStudent: " + username);
+        
+        TextArea textArea = new TextArea(code);
+        textArea.setEditable(false);
+        textArea.setWrapText(true);
+        textArea.setMaxWidth(Double.MAX_VALUE);
+        textArea.setMaxHeight(Double.MAX_VALUE);
+        textArea.setStyle("-fx-font-family: 'Consolas'; -fx-font-size: 14px; -fx-control-inner-background: #080d28; -fx-text-fill: #a0d1ff;");
+        GridPane.setVgrow(textArea, Priority.ALWAYS);
+        GridPane.setHgrow(textArea, Priority.ALWAYS);
+
+        GridPane expContent = new GridPane();
+        expContent.setMaxWidth(Double.MAX_VALUE);
+        expContent.add(textArea, 0, 0);
+
+        alert.getDialogPane().setContent(expContent);
+        
+        DialogPane dp = alert.getDialogPane();
+        dp.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + ";" +
+            "-fx-border-color: " + Theme.PRIMARY + ";" +
+            "-fx-border-radius: 10;" +
+            "-fx-border-width: 1.5;"
+        );
+        dp.lookupAll(".label").forEach(n -> n.setStyle("-fx-text-fill: white;"));
+        javafx.scene.Node headerPanel = dp.lookup(".header-panel");
+        if (headerPanel != null) headerPanel.setStyle("-fx-background-color: " + Theme.NAV_BG + ";");
+
+        alert.showAndWait();
     }
 
     private void confirmLogout() {
@@ -507,6 +636,178 @@ public class TeacherDashboardView {
             if (result == ButtonType.OK) {
                 App.db.logout();
                 App.changeScene(new LoginView().getView());
+            }
+        });
+    }
+
+    private void loadStudentsForClass(String classCode) {
+        allStudents = App.db.getAllStudentsInfo().stream()
+            .filter(s -> classCode != null && classCode.equals(s.getClassCode()))
+            .collect(Collectors.toList());
+        if (studentCardsContainer != null) {
+            renderStudentCards(allStudents);
+            updateStatsRow();
+        }
+    }
+
+    private void updateStatsRow() {
+        if (statsRow != null) {
+            // We need to re-render the stats row with the new allStudents
+            statsRow.getChildren().clear();
+            HBox newRow = buildStatsRow();
+            statsRow.getChildren().addAll(newRow.getChildren());
+        }
+    }
+
+    private void showNewClassDialog(String username, ComboBox<String> classDropdown) {
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle("Create New Class");
+        dialog.setHeaderText("Enter a unique code for your new class:");
+        dialog.setContentText("Class Code:");
+
+        DialogPane dp = dialog.getDialogPane();
+        dp.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + ";" +
+            "-fx-border-color: " + Theme.PRIMARY + ";" +
+            "-fx-border-radius: 10;" +
+            "-fx-border-width: 1.5;"
+        );
+        dp.lookupAll(".label").forEach(n -> n.setStyle("-fx-text-fill: white;"));
+        javafx.scene.Node headerPanel = dp.lookup(".header-panel");
+        if (headerPanel != null) headerPanel.setStyle("-fx-background-color: " + Theme.NAV_BG + ";");
+
+        dialog.showAndWait().ifPresent(code -> {
+            if (!code.trim().isEmpty()) {
+                App.db.addTeacherClass(username, code.trim());
+                classDropdown.getItems().clear();
+                classDropdown.getItems().addAll(App.db.getTeacherClasses(username));
+                classDropdown.getSelectionModel().select(code.trim());
+            }
+        });
+    }
+
+    private void showSettingsDialog(String classCode) {
+        if (classCode == null || classCode.isEmpty()) return;
+        
+        TextInputDialog dialog = new TextInputDialog(String.valueOf(App.db.getClassMaxWarnings(classCode)));
+        dialog.setTitle("Class Settings");
+        dialog.setHeaderText("Set maximum allowed focus violations (Alt-Tabs) for " + classCode);
+        dialog.setContentText("Max Violations:");
+
+        DialogPane dp = dialog.getDialogPane();
+        dp.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + ";" +
+            "-fx-border-color: " + Theme.PRIMARY + ";" +
+            "-fx-border-radius: 10;" +
+            "-fx-border-width: 1.5;"
+        );
+        dp.lookupAll(".label").forEach(n -> n.setStyle("-fx-text-fill: white;"));
+        javafx.scene.Node headerPanel = dp.lookup(".header-panel");
+        if (headerPanel != null) headerPanel.setStyle("-fx-background-color: " + Theme.NAV_BG + ";");
+
+        dialog.showAndWait().ifPresent(val -> {
+            try {
+                int limit = Integer.parseInt(val.trim());
+                if (limit >= 0) {
+                    App.db.setClassMaxWarnings(classCode, limit);
+                }
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private void showCreateTaskDialog(String classCode) {
+        if (classCode == null || classCode.isEmpty()) return;
+        
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Create Custom Task");
+        dialog.setHeaderText("Create a new assignment for class: " + classCode);
+        
+        DialogPane dp = dialog.getDialogPane();
+        dp.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + ";" +
+            "-fx-border-color: " + Theme.PRIMARY + ";" +
+            "-fx-border-radius: 10;" +
+            "-fx-border-width: 1.5;"
+        );
+        dp.lookupAll(".label").forEach(n -> n.setStyle("-fx-text-fill: white;"));
+        javafx.scene.Node headerPanel = dp.lookup(".header-panel");
+        if (headerPanel != null) headerPanel.setStyle("-fx-background-color: " + Theme.NAV_BG + ";");
+        
+        dp.getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        
+        TextField titleField = new TextField();
+        titleField.setPromptText("Task Title (e.g. Implement AVL Tree)");
+        titleField.setStyle("-fx-background-color: #1e2c56; -fx-text-fill: white; -fx-padding: 8;");
+        
+        TextArea descField = new TextArea();
+        descField.setPromptText("Task Description / Instructions");
+        descField.setWrapText(true);
+        descField.setStyle("-fx-control-inner-background: #1e2c56; -fx-text-fill: white;");
+        
+        VBox content = new VBox(10, new Label("Title:"), titleField, new Label("Description:"), descField);
+        dp.setContent(content);
+        
+        dialog.showAndWait().ifPresent(result -> {
+            if (result == ButtonType.OK && !titleField.getText().trim().isEmpty()) {
+                App.db.createCustomTask(classCode, titleField.getText().trim(), descField.getText().trim());
+                if (selectedStudent != null) {
+                    showStudentDetails(selectedStudent);
+                }
+            }
+        });
+    }
+
+    private void showGradingDialog(String username, DatabaseManager.CustomTask task) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Grade Assignment");
+        dialog.setHeaderText("Grading: " + username + " - " + task.title);
+
+        DialogPane dp = dialog.getDialogPane();
+        dp.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + ";" +
+            "-fx-border-color: " + Theme.PRIMARY + ";" +
+            "-fx-border-radius: 10;" +
+            "-fx-border-width: 1.5;"
+        );
+        dp.lookupAll(".label").forEach(n -> n.setStyle("-fx-text-fill: white;"));
+        javafx.scene.Node headerPanel = dp.lookup(".header-panel");
+        if (headerPanel != null) headerPanel.setStyle("-fx-background-color: " + Theme.NAV_BG + ";");
+
+        ButtonType rejectBtnType = new ButtonType("Reject", ButtonBar.ButtonData.OTHER);
+        dp.getButtonTypes().addAll(ButtonType.OK, rejectBtnType, ButtonType.CANCEL);
+
+        TextArea codeArea = new TextArea();
+        codeArea.setEditable(false);
+        codeArea.setWrapText(true);
+        codeArea.setPrefHeight(200);
+        codeArea.setStyle("-fx-control-inner-background: #111a3a; -fx-text-fill: #a9b7c6; -fx-font-family: 'Consolas';");
+        codeArea.setText(App.db.getAnswer(username, task.id));
+
+        Integer existingGrade = App.db.getGrade(username, task.id);
+        TextField gradeField = new TextField();
+        gradeField.setPromptText("Enter Score (0-100)");
+        gradeField.setStyle("-fx-background-color: #1e2c56; -fx-text-fill: white; -fx-padding: 8;");
+        if (existingGrade != null && existingGrade != -1) {
+            gradeField.setText(String.valueOf(existingGrade));
+        }
+
+        VBox content = new VBox(10, new Label("Student's Submitted Code:"), codeArea, new Label("Grade (Leave blank to reject):"), gradeField);
+        dp.setContent(content);
+
+        dialog.showAndWait().ifPresent(result -> {
+            if (result == ButtonType.OK && !gradeField.getText().trim().isEmpty()) {
+                try {
+                    int score = Integer.parseInt(gradeField.getText().trim());
+                    App.db.setGrade(username, task.id, score);
+                    if (selectedStudent != null) {
+                        showStudentDetails(selectedStudent);
+                    }
+                } catch (Exception ignored) {}
+            } else if (result == rejectBtnType) {
+                App.db.setGrade(username, task.id, -1);
+                if (selectedStudent != null) {
+                    showStudentDetails(selectedStudent);
+                }
             }
         });
     }

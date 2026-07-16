@@ -340,6 +340,20 @@ public class LoginView {
         roleBox.setAlignment(Pos.CENTER);
         roleBox.setPadding(new Insets(4, 0, 4, 0));
 
+        VBox masterKeyRow = buildIconPassField("🗝", "Teacher Master Key");
+        PasswordField masterKeyField = (PasswordField) masterKeyRow.getUserData();
+        masterKeyRow.setVisible(false);
+        masterKeyRow.setManaged(false);
+
+        studentRadio.setOnAction(e -> {
+            masterKeyRow.setVisible(false);
+            masterKeyRow.setManaged(false);
+        });
+        teacherRadio.setOnAction(e -> {
+            masterKeyRow.setVisible(true);
+            masterKeyRow.setManaged(true);
+        });
+
         Button regBtn = makeGradientBtn("CREATE ACCOUNT  →");
 
         regBtn.setOnAction(e -> {
@@ -362,8 +376,20 @@ public class LoginView {
                 return;
             }
             String selectedRole = studentRadio.isSelected() ? "student" : "teacher";
+            
+            if ("teacher".equals(selectedRole)) {
+                if (!"5601".equals(masterKeyField.getText())) {
+                    msg.setText("⚠  Invalid Teacher Master Key.");
+                    shakeNode(card);
+                    return;
+                }
+            }
+
             if (App.db.register(user, pass, selectedRole)) {
                 if ("teacher".equals(selectedRole)) {
+                    // Auto-generate class code for the new teacher
+                    String newClassCode = user.toUpperCase() + "-" + (1000 + new java.util.Random().nextInt(9000));
+                    App.db.addTeacherClass(user, newClassCode);
                     App.changeScene(new TeacherDashboardView().getView());
                 } else {
                     App.changeScene(new DashboardView().getView());
@@ -381,7 +407,7 @@ public class LoginView {
 
         Label switchLink = buildSwitchLink("Already have an account?  Sign In →", true);
 
-        card.getChildren().addAll(title, subtitle, msg, userRow, passRow, passRow2, roleBox, regBtn, sep, switchLink);
+        card.getChildren().addAll(title, subtitle, msg, userRow, passRow, passRow2, roleBox, masterKeyRow, regBtn, sep, switchLink);
         staggerEntrance(card);
         return card;
     }

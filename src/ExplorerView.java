@@ -86,7 +86,7 @@ public class ExplorerView {
 
     // ── Regex patterns for Java-style commands ─────────────────
     private static final Pattern METHOD_CALL =
-            Pattern.compile("^\\s*(?:\\w+\\.)(insert|delete|search|clear)\\s*\\(\\s*(\\d*)\\s*\\)\\s*;?\\s*$",
+            Pattern.compile("^\\s*(?:(?:\\w+\\.)?root\\s*=\\s*)?(?:\\w+\\.)?(insert|delete|search|clear)\\s*\\(\\s*(?:\\w+\\.root\\s*,\\s*)?(\\d*)\\s*\\)\\s*;?\\s*$",
                     Pattern.CASE_INSENSITIVE);
     private static final Pattern CONSTRUCTOR =
             Pattern.compile("^\\s*(?:BinarySearchTree|BST|AVLTree|AVL|RedBlackTree|RBT|RedBlack|BTree|23Tree|TreeNode)\\s+\\w+\\s*=\\s*new\\s+(?:BinarySearchTree|BST|AVLTree|AVL|RedBlackTree|RBT|RedBlack|BTree|23Tree|TreeNode)\\s*\\(\\s*\\)\\s*;?\\s*$",
@@ -97,7 +97,10 @@ public class ExplorerView {
             Pattern.compile("^\\s*int\\[\\]\\s*\\w+\\s*=\\s*(?:new\\s+int\\[\\]\\s*)?\\{([^}]+)\\}\\s*;?\\s*$",
                     Pattern.CASE_INSENSITIVE);
     private static final Pattern FOR_EACH =
-            Pattern.compile("^\\s*for\\s*\\(\\s*int\\s+\\w+\\s*:\\s*(\\w+)\\s*\\)\\s*\\{?\\s*(?:\\w+\\.)(insert|delete|search)\\s*\\(\\s*\\w+\\s*\\)\\s*;?\\s*\\}?\\s*$",
+            Pattern.compile("^\\s*for\\s*\\(\\s*int\\s+\\w+\\s*:\\s*(\\w+)\\s*\\)\\s*\\{?\\s*(?:(?:\\w+\\.)?root\\s*=\\s*)?(?:\\w+\\.)?(insert|delete|search)\\s*\\(\\s*(?:\\w+\\.root\\s*,\\s*)?\\w+\\s*\\)\\s*;?\\s*\\}?\\s*$",
+                    Pattern.CASE_INSENSITIVE);
+    private static final Pattern NODE_ASSIGNMENT =
+            Pattern.compile("^\\s*(?:Node|TreeNode)?\\s*(?:[a-zA-Z0-9_\\.]+)?\\s*=\\s*new\\s+(?:Node|TreeNode)\\s*\\(\\s*(\\d+)\\s*\\)\\s*;?\\s*$",
                     Pattern.CASE_INSENSITIVE);
 
     private java.util.Map<String, int[]> declaredArrays = new java.util.HashMap<>();
@@ -768,17 +771,41 @@ public class ExplorerView {
             return;
         }
         int val = vals.get(index);
-        insert(val, null, sessionId);
-        highlightNode(val, Color.web("#10b981"), 800);
-        
-        PauseTransition pause = new PauseTransition(Duration.millis(getAnimMs() + 100));
-        pause.setOnFinished(e -> {
+        insert(val, () -> {
+            highlightNode(val, Color.web("#10b981"), 800);
             if (sessionId == treeSessionId) {
                 insertSequence(vals, index + 1, sessionId);
             }
-        });
-        registerAnimation(pause);
-        pause.play();
+        }, sessionId);
+    }
+
+    private void insertFastSequence(List<Integer> vals, int index, int sessionId, int originalSpeed) {
+        if (sessionId != treeSessionId) {
+            animationSpeed = originalSpeed;
+            if (speedSlider != null) speedSlider.setValue(originalSpeed);
+            return;
+        }
+        if ("B-Tree".equals(currentMode)) {
+            insertBTreeSequence(vals, index, sessionId);
+            animationSpeed = originalSpeed;
+            if (speedSlider != null) speedSlider.setValue(originalSpeed);
+            return;
+        }
+        if (index >= vals.size()) {
+            animationSpeed = originalSpeed;
+            if (speedSlider != null) speedSlider.setValue(originalSpeed);
+            status("Preset loaded successfully.");
+            return;
+        }
+        int val = vals.get(index);
+        insert(val, () -> {
+            if (sessionId == treeSessionId) {
+                insertFastSequence(vals, index + 1, sessionId, originalSpeed);
+            } else {
+                animationSpeed = originalSpeed;
+                if (speedSlider != null) speedSlider.setValue(originalSpeed);
+            }
+        }, sessionId);
     }
 
     private double getAnimMs() {
@@ -797,7 +824,9 @@ public class ExplorerView {
         int[] vals = {40, 20, 60, 10, 30, 50, 70};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0, sessionId);
+        int oldSpeed = animationSpeed;
+        animationSpeed = 10000;
+        insertFastSequence(list, 0, sessionId, oldSpeed);
     }
 
     private void loadPresetSkewed() {
@@ -808,7 +837,9 @@ public class ExplorerView {
         int[] vals = {10, 20, 30, 40, 50, 60};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0, sessionId);
+        int oldSpeed = animationSpeed;
+        animationSpeed = 10000;
+        insertFastSequence(list, 0, sessionId, oldSpeed);
     }
 
     private void loadPresetRandom(int count) {
@@ -825,7 +856,9 @@ public class ExplorerView {
             used.add(val);
             list.add(val);
         }
-        insertSequence(list, 0, sessionId);
+        int oldSpeed = animationSpeed;
+        animationSpeed = 10000;
+        insertFastSequence(list, 0, sessionId, oldSpeed);
     }
 
     private void loadPresetSorted() {
@@ -836,7 +869,9 @@ public class ExplorerView {
         int[] vals = {10, 20, 30, 40, 50, 60, 70};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0, sessionId);
+        int oldSpeed = animationSpeed;
+        animationSpeed = 10000;
+        insertFastSequence(list, 0, sessionId, oldSpeed);
     }
 
     private void loadPresetZigZag() {
@@ -844,10 +879,12 @@ public class ExplorerView {
         executionSessionId++;
         int sessionId = treeSessionId;
         handleClear();
-        int[] vals = {50, 20, 40, 30, 35};
+        int[] vals = {50, 20, 40, 10, 30, 60};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0, sessionId);
+        int oldSpeed = animationSpeed;
+        animationSpeed = 10000;
+        insertFastSequence(list, 0, sessionId, oldSpeed);
     }
 
     private void loadPresetComplete() {
@@ -858,7 +895,9 @@ public class ExplorerView {
         int[] vals = {50, 25, 75, 12, 37, 62, 87, 6, 18, 31, 43};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0, sessionId);
+        int oldSpeed = animationSpeed;
+        animationSpeed = 10000;
+        insertFastSequence(list, 0, sessionId, oldSpeed);
     }
 
     private void loadPresetFibonacci() {
@@ -869,7 +908,9 @@ public class ExplorerView {
         int[] vals = {13, 5, 34, 2, 8, 21, 55, 1, 3, 89};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0, sessionId);
+        int oldSpeed = animationSpeed;
+        animationSpeed = 10000;
+        insertFastSequence(list, 0, sessionId, oldSpeed);
     }
 
     private void inOrder(TreeNode node, List<TreeNode> list) {
@@ -986,6 +1027,10 @@ public class ExplorerView {
 
     public void setCode(String code) {
         if (codeArea != null) codeArea.setText(code);
+    }
+    
+    public void setReadOnly(boolean readOnly) {
+        if (codeArea != null) codeArea.setEditable(!readOnly);
     }
 
     public boolean hasNode(int value) {
@@ -1124,9 +1169,9 @@ public class ExplorerView {
         // Strip single-line comments
         code = code.replaceAll("//.*", "");
         // Collapse multi-line for-each loops with braces
-        code = code.replaceAll("(?i)for\\s*\\(\\s*int\\s+(\\w+)\\s*:\\s*(\\w+)\\s*\\)\\s*\\{\\s*\\r?\\n\\s*(\\w+\\.(?:insert|delete|search)\\(\\s*\\1\\s*\\)\\s*;?)\\s*\\r?\\n\\s*\\}", "for (int $1 : $2) { $3 }");
+        code = code.replaceAll("(?is)for\\s*\\(\\s*int\\s+(\\w+)\\s*:\\s*(\\w+)\\s*\\)\\s*\\{\\s*([^}]+)\\s*\\}", "for (int $1 : $2) { $3 }");
         // Collapse multi-line for-each loops without braces
-        code = code.replaceAll("(?i)for\\s*\\(\\s*int\\s+(\\w+)\\s*:\\s*(\\w+)\\s*\\)\\s*\\r?\\n\\s*(\\w+\\.(?:insert|delete|search)\\(\\s*\\1\\s*\\)\\s*;?)", "for (int $1 : $2) { $3 }");
+        code = code.replaceAll("(?i)for\\s*\\(\\s*int\\s+(\\w+)\\s*:\\s*(\\w+)\\s*\\)\\s*\\r?\\n\\s*([^\\n{]+;)", "for (int $1 : $2) { $3 }");
         
         // Collapse multi-line array declarations
         java.util.regex.Pattern arrPat = java.util.regex.Pattern.compile("(?is)int\\[\\]\\s*(\\w+)\\s*=\\s*(?:new\\s+int\\[\\]\\s*)?\\{\\s*([^}]+)\\s*\\}\\s*;?");
@@ -1300,28 +1345,36 @@ public class ExplorerView {
             String lower = line.toLowerCase();
             if (lower.contains("avltree") || lower.contains("new avl")) {
                 Platform.runLater(() -> {
-                    setTreeModeActive(treeModeButtons[1], new Button[]{treeModeButtons[0], treeModeButtons[2], treeModeButtons[3]});
+                    if (treeModeButtons != null) {
+                        setTreeModeActive(treeModeButtons[1], new Button[]{treeModeButtons[0], treeModeButtons[2], treeModeButtons[3]});
+                    }
                     currentMode = "AVL";
                     toggleBalanceLabels(true);
                 });
                 callback.accept("AVLTree initialized");
             } else if (lower.contains("redblack") || lower.contains("rbt")) {
                 Platform.runLater(() -> {
-                    setTreeModeActive(treeModeButtons[2], new Button[]{treeModeButtons[0], treeModeButtons[1], treeModeButtons[3]});
+                    if (treeModeButtons != null) {
+                        setTreeModeActive(treeModeButtons[2], new Button[]{treeModeButtons[0], treeModeButtons[1], treeModeButtons[3]});
+                    }
                     currentMode = "Red-Black";
                     toggleBalanceLabels(false);
                 });
                 callback.accept("RedBlackTree initialized");
             } else if (lower.contains("btree") || lower.contains("23tree")) {
                 Platform.runLater(() -> {
-                    setTreeModeActive(treeModeButtons[3], new Button[]{treeModeButtons[0], treeModeButtons[1], treeModeButtons[2]});
+                    if (treeModeButtons != null) {
+                        setTreeModeActive(treeModeButtons[3], new Button[]{treeModeButtons[0], treeModeButtons[1], treeModeButtons[2]});
+                    }
                     currentMode = "B-Tree";
                     toggleBalanceLabels(false);
                 });
                 callback.accept("B-Tree (2-3 Tree) initialized");
             } else {
                 Platform.runLater(() -> {
-                    setTreeModeActive(treeModeButtons[0], new Button[]{treeModeButtons[1], treeModeButtons[2], treeModeButtons[3]});
+                    if (treeModeButtons != null) {
+                        setTreeModeActive(treeModeButtons[0], new Button[]{treeModeButtons[1], treeModeButtons[2], treeModeButtons[3]});
+                    }
                     currentMode = "BST";
                     toggleBalanceLabels(false);
                 });
@@ -1369,6 +1422,13 @@ public class ExplorerView {
             List<Integer> list = new ArrayList<>();
             for (int val : vals) list.add(val);
             executeBatchCommands(cmd, list, 0, new StringBuilder(), callback);
+            return;
+        }
+
+        Matcher nodeAssign = NODE_ASSIGNMENT.matcher(line);
+        if (nodeAssign.matches()) {
+            String val = nodeAssign.group(1);
+            executeCommandAsync("insert", val, callback);
             return;
         }
 
@@ -3525,14 +3585,7 @@ public class ExplorerView {
         int val = vals.get(index);
         bTreeInsert(val, () -> {
             if (sessionId == treeSessionId) {
-                PauseTransition pause = new PauseTransition(Duration.millis(getAnimMs() + 100));
-                pause.setOnFinished(e -> {
-                    if (sessionId == treeSessionId) {
-                        insertBTreeSequence(vals, index + 1, sessionId);
-                    }
-                });
-                registerAnimation(pause);
-                pause.play();
+                insertBTreeSequence(vals, index + 1, sessionId);
             }
         }, sessionId);
     }

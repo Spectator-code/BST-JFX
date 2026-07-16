@@ -29,7 +29,7 @@ public class ChallengeView {
 
     // ── Focus-lock state ───────────────────────────────────────────────────
     private int warningCount = 0;
-    private static final int MAX_WARNINGS = 3;
+    private int maxWarnings = 3;
     private StackPane warningOverlay;
     private javafx.scene.control.Button overlayDismissBtn;
     private ChangeListener<Boolean> focusListener;
@@ -37,6 +37,8 @@ public class ChallengeView {
     private boolean overlayActive = false;
     private boolean listenerArmed = false; // prevents false trigger on first load
     private javafx.scene.Node blurredNode;
+    private PasswordField masterKeyField;
+    private Label masterKeyMsg;
 
     // ── Core view state ───────────────────────────────────────────────────
     private int currentProblemId = 1;
@@ -60,6 +62,10 @@ public class ChallengeView {
 
     public Parent getView() {
         String user = App.db.getCurrentUser();
+        String classCode = App.db.getClassCode(user);
+        if (classCode != null && !classCode.isEmpty()) {
+            this.maxWarnings = App.db.getClassMaxWarnings(classCode);
+        }
         long lockoutTime = App.db.getLockoutTimestamp(user);
         long elapsed = System.currentTimeMillis() - lockoutTime;
         long cooldownMs = 5 * 60 * 1000; // 5 minutes
@@ -258,10 +264,30 @@ public class ChallengeView {
         overlayDismissBtn.setOnMouseEntered(e -> overlayDismissBtn.setOpacity(0.85));
         overlayDismissBtn.setOnMouseExited(e  -> overlayDismissBtn.setOpacity(1.0));
 
+        masterKeyField = new PasswordField();
+        masterKeyField.setPromptText("Enter Teacher Master Key");
+        masterKeyField.setMaxWidth(200);
+        masterKeyField.setVisible(false);
+        masterKeyField.setManaged(false);
+        masterKeyField.setStyle(
+            "-fx-background-color: #1e2c56;" +
+            "-fx-text-fill: white;" +
+            "-fx-padding: 8 12;" +
+            "-fx-background-radius: 6;" +
+            "-fx-border-color: #3b82f6;" +
+            "-fx-border-radius: 6;"
+        );
+
+        masterKeyMsg = new Label();
+        masterKeyMsg.setTextFill(Color.web(Theme.DANGER));
+        masterKeyMsg.setFont(Font.font("Arial", 12));
+        masterKeyMsg.setVisible(false);
+        masterKeyMsg.setManaged(false);
+
         // Dismissed: hide overlay, update nav label
         overlayDismissBtn.setOnAction(e -> hideOverlay(navStatusLabel));
 
-        card.getChildren().addAll(icon, heading, countLabel, body, sep, tipsLabel, overlayDismissBtn);
+        card.getChildren().addAll(icon, heading, countLabel, body, sep, tipsLabel, masterKeyField, masterKeyMsg, overlayDismissBtn);
 
         StackPane.setAlignment(card, Pos.CENTER);
         overlay.getChildren().add(card);
@@ -325,9 +351,9 @@ public class ChallengeView {
         App.db.incrementViolationCount(App.db.getCurrentUser());
         // Update the warning count label inside the card
         Label countLabel = (Label) warningOverlay.getUserData();
-        String countColor = warningCount >= MAX_WARNINGS ? "#e74c3c" : "#ffd966";
-        countLabel.setText("⚠  Warning " + warningCount + " of " + MAX_WARNINGS +
-            (warningCount >= MAX_WARNINGS ? " — FINAL WARNING" : ""));
+        String countColor = warningCount >= maxWarnings ? "#e74c3c" : "#ffd966";
+        countLabel.setText("⚠  Warning " + warningCount + " of " + maxWarnings +
+            (warningCount >= maxWarnings ? " — FINAL WARNING" : ""));
         countLabel.setTextFill(Color.web(countColor));
 
         // Update overlay button action/style based on warnings count
@@ -339,18 +365,33 @@ public class ChallengeView {
             "-fx-cursor: hand;" +
             "-fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.3), 8, 0, 0, 0);";
 
-        if (warningCount > MAX_WARNINGS) {
+        if (warningCount >= maxWarnings) {
             // Set lockout timestamp
             App.db.setLockoutTimestamp(App.db.getCurrentUser(), System.currentTimeMillis());
 
-            overlayDismissBtn.setText("❌ Challenge Locked — Return to Dashboard");
-            overlayDismissBtn.setStyle(dismissBase.replace(Theme.DANGER, "#7c0000"));
+            masterKeyField.setVisible(true);
+            masterKeyField.setManaged(true);
+            masterKeyField.clear();
+            masterKeyMsg.setVisible(true);
+            masterKeyMsg.setManaged(true);
+            masterKeyMsg.setText("");
+
+            overlayDismissBtn.setText("🔓 Unlock Challenge");
+            overlayDismissBtn.setStyle(dismissBase.replace(Theme.DANGER, "#3b82f6"));
             overlayDismissBtn.setOnAction(e -> {
-                detachListeners();
-                if (explorer != null) {
-                    explorer.stopAllTimelines();
+                if ("5601".equals(masterKeyField.getText())) {
+                    // Reset violations
+                    App.db.setViolationCount(App.db.getCurrentUser(), 0);
+                    warningCount = 0;
+                    App.db.setLockoutTimestamp(App.db.getCurrentUser(), 0); // clear lockout
+                    masterKeyField.setVisible(false);
+                    masterKeyField.setManaged(false);
+                    masterKeyMsg.setVisible(false);
+                    masterKeyMsg.setManaged(false);
+                    hideOverlay(navStatusLabel);
+                } else {
+                    masterKeyMsg.setText("Invalid Master Key!");
                 }
-                App.changeScene(new DashboardView().getView());
             });
         } else {
             overlayDismissBtn.setText("✔  I Understand — Resume Challenge");
@@ -413,8 +454,8 @@ public class ChallengeView {
                 "-fx-background-radius: 8;" +
                 "-fx-padding: 4 10;"
             );
-        } else if (warningCount < MAX_WARNINGS) {
-            navLabel.setText("⚠ Warnings: " + warningCount + "/" + MAX_WARNINGS);
+        } else if (warningCount < maxWarnings) {
+            navLabel.setText("⚠ Warnings: " + warningCount + "/" + maxWarnings);
             navLabel.setTextFill(Color.web("#ffd966"));
             navLabel.setStyle(
                 "-fx-background-color: #2a1e00;" +
@@ -442,9 +483,25 @@ public class ChallengeView {
     //  Problem Loading
     // ═══════════════════════════════════════════════════════════════════════
 
-    private void loadProblem(int id) {
+    private void loadProblem(int requestedId) {
         leftPanel.getChildren().clear();
-        ProblemManager.Problem p = ProblemManager.get(id);
+        
+        final int id;
+        final ProblemManager.Problem p;
+        if (requestedId >= 1000) {
+            DatabaseManager.CustomTask ct = App.db.getCustomTask(requestedId);
+            if (ct == null) {
+                id = 1;
+                p = ProblemManager.get(1);
+            } else {
+                id = requestedId;
+                p = new ProblemManager.Problem(id, ct.title, "Custom", ct.description, "/* Write your answer here */\n", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+            }
+        } else {
+            id = requestedId;
+            p = ProblemManager.get(id);
+        }
+        
         java.util.List<Integer> solvedList = App.db.getSolvedProblems();
         this.currentProblemId = id;
 
@@ -458,11 +515,17 @@ public class ChallengeView {
         selector.setVisibleRowCount(10);
 
         // Populate items
-        for (ProblemManager.Problem prob : ProblemManager.getAll()) {
-            String mark = solvedList.contains(prob.id) ? "✅ " : "   ";
-            selector.getItems().add(mark + prob.id + ". " + prob.title);
+        if (id >= 1000) {
+            selector.getItems().add(id + ". " + p.title);
+            selector.getSelectionModel().selectFirst();
+            selector.setDisable(true);
+        } else {
+            for (ProblemManager.Problem prob : ProblemManager.getAll()) {
+                String mark = solvedList.contains(prob.id) ? "✅ " : "   ";
+                selector.getItems().add(mark + prob.id + ". " + prob.title);
+            }
+            selector.getSelectionModel().select(id - 1);
         }
-        selector.getSelectionModel().select(id - 1);
 
         // Custom cell factory — styles EACH popup list item with dark bg + white text
         selector.setCellFactory(lv -> new ListCell<String>() {
@@ -524,6 +587,7 @@ public class ChallengeView {
         );
 
         selector.setOnAction(e -> {
+            if (id >= 1000) return;
             int selectedId = selector.getSelectionModel().getSelectedIndex() + 1;
             loadProblem(selectedId);
         });
@@ -593,73 +657,35 @@ public class ChallengeView {
 
         // ── Test Cases Checklist Panel ────────────────────────────────────
         VBox testCasesBox = new VBox(8);
-        testCasesBox.setPadding(new Insets(12));
-        testCasesBox.setStyle(
-            "-fx-background-color: #0c123655;" +
-            "-fx-border-color: " + Theme.BORDER + "44;" +
-            "-fx-border-radius: 8;" +
-            "-fx-background-radius: 8;"
-        );
-
         Label testHeader = new Label("📋  Test Cases");
-        testHeader.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
-        testHeader.setTextFill(Color.web(Theme.TEXT_LIGHT));
-        testCasesBox.getChildren().add(testHeader);
 
-        for (String test : p.tests) {
-            Label testLbl = new Label("   ○  " + test);
-            testLbl.setFont(Font.font("Consolas", 12));
-            testLbl.setTextFill(Color.web(Theme.TEXT_MUTED));
-            testCasesBox.getChildren().add(testLbl);
-        }
-
-        // ── Hint Expandable Drawer ────────────────────────────────────────
-        VBox hintContainer = new VBox(8);
-        if (!p.hints.isEmpty()) {
-            Button revealHintBtn = new Button("💡 Reveal Hint");
-            revealHintBtn.setFont(Font.font("Segoe UI", FontWeight.BOLD, 11));
-            revealHintBtn.setStyle(
-                "-fx-background-color: #8e44ad22;" +
-                "-fx-text-fill: #ffd966;" +
-                "-fx-border-color: #8e44ad66;" +
-                "-fx-border-radius: 6;" +
-                "-fx-background-radius: 6;" +
-                "-fx-padding: 6 12;" +
-                "-fx-cursor: hand;"
+        if (id < 1000) {
+            testCasesBox.setPadding(new Insets(12));
+            testCasesBox.setStyle(
+                "-fx-background-color: #0c123655;" +
+                "-fx-border-color: " + Theme.BORDER + "44;" +
+                "-fx-border-radius: 8;" +
+                "-fx-background-radius: 8;"
             );
 
-            Label hintTextLabel = new Label("💡 Hint: " + p.hints.get(0));
-            hintTextLabel.setWrapText(true);
-            hintTextLabel.setTextFill(Color.web("#ffd966"));
-            hintTextLabel.setFont(Font.font("Arial", 12));
-            hintTextLabel.setStyle(
-                "-fx-background-color: #2a2000;" +
-                "-fx-background-radius: 8;" +
-                "-fx-padding: 8 10;" +
-                "-fx-border-color: #665500;" +
-                "-fx-border-radius: 8;"
-            );
-            hintTextLabel.setVisible(false);
-            hintTextLabel.setManaged(false);
-
-            revealHintBtn.setOnAction(ev -> {
-                revealHintBtn.setVisible(false);
-                revealHintBtn.setManaged(false);
-                hintTextLabel.setVisible(true);
-                hintTextLabel.setManaged(true);
-                
-                FadeTransition ft = new FadeTransition(Duration.millis(300), hintTextLabel);
-                ft.setFromValue(0.0);
-                ft.setToValue(1.0);
-                ft.play();
-            });
-
-            hintContainer.getChildren().addAll(revealHintBtn, hintTextLabel);
+            testHeader.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+            testHeader.setTextFill(Color.web(Theme.TEXT_LIGHT));
+            testCasesBox.getChildren().add(testHeader);
         }
+
+        if (id < 1000) {
+            for (String test : p.tests) {
+                Label testLbl = new Label("   ○  " + test);
+                testLbl.setFont(Font.font("Consolas", 12));
+                testLbl.setTextFill(Color.web(Theme.TEXT_MUTED));
+                testCasesBox.getChildren().add(testLbl);
+            }
+        }
+
 
         // ── Submit & Reset buttons ────────────────────────────────────────
         HBox submitBox = new HBox(8);
-        Button submitBtn = styledBtn("▶  Submit & Check", Theme.SUCCESS);
+        Button submitBtn = styledBtn(id >= 1000 ? "📤  Submit Assignment" : "▶  Submit & Check", Theme.SUCCESS);
         submitBtn.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(submitBtn, Priority.ALWAYS);
 
@@ -669,14 +695,16 @@ public class ChallengeView {
                 explorer.setCode(p.startingCode);
                 explorer.handleClear();
             }
-            // Re-render raw test cases checklist
-            testCasesBox.getChildren().clear();
-            testCasesBox.getChildren().add(testHeader);
-            for (String test : p.tests) {
-                Label testLbl = new Label("   ○  " + test);
-                testLbl.setFont(Font.font("Consolas", 12));
-                testLbl.setTextFill(Color.web(Theme.TEXT_MUTED));
-                testCasesBox.getChildren().add(testLbl);
+            if (id < 1000) {
+                // Re-render raw test cases checklist
+                testCasesBox.getChildren().clear();
+                testCasesBox.getChildren().add(testHeader);
+                for (String test : p.tests) {
+                    Label testLbl = new Label("   ○  " + test);
+                    testLbl.setFont(Font.font("Consolas", 12));
+                    testLbl.setTextFill(Color.web(Theme.TEXT_MUTED));
+                    testCasesBox.getChildren().add(testLbl);
+                }
             }
         });
         submitBox.getChildren().addAll(submitBtn, resetTemplateBtn);
@@ -691,6 +719,17 @@ public class ChallengeView {
             String code = explorer != null ? explorer.getCode().trim() : "";
             if (code.isEmpty()) {
                 setStatus(finalStatus, "❌  Code editor is empty!", false);
+                return;
+            }
+
+            if (p.id >= 1000) {
+                App.db.saveAnswer(p.id, code);
+                setStatus(finalStatus, "✅  Assignment Submitted for Grading!", true);
+                if (explorer != null) {
+                    explorer.setReadOnly(true);
+                }
+                submitBox.setDisable(true);
+                submitBox.setVisible(false);
                 return;
             }
 
@@ -715,6 +754,7 @@ public class ChallengeView {
 
             if (allPassed) {
                 App.db.markProblemSolved(id);
+                App.db.saveAnswer(id, explorer != null ? explorer.getCode().trim() : "");
                 setStatus(this.statusLabel, "✅  Tests Passed! Problem solved.", true);
                 if (this.solvedNav != null) {
                     int tSolved = App.db.getSolvedProblems().size();
@@ -749,13 +789,35 @@ public class ChallengeView {
         // ── Assemble panel ────────────────────────────────────────────────
         leftPanel.getChildren().addAll(selectorLabel, selector, pTitle, pDiff, solvedBadge, pDesc);
         leftPanel.getChildren().add(testCasesBox);
-        if (!p.hints.isEmpty()) leftPanel.getChildren().add(hintContainer);
         leftPanel.getChildren().addAll(sep, submitBox, statusLabel, navBtns);
 
         if (explorer != null) {
             explorer.handleClear();
             if (p.startingCode != null && !p.startingCode.isEmpty()) {
                 explorer.setCode(p.startingCode);
+            }
+            
+            if (id >= 1000) {
+                String existingAnswer = App.db.getAnswer(App.db.getCurrentUser(), id);
+                Integer existingGrade = App.db.getGrade(App.db.getCurrentUser(), id);
+                boolean isRejected = existingGrade != null && existingGrade == -1;
+                
+                if (existingAnswer != null) {
+                    explorer.setCode(existingAnswer);
+                    if (!isRejected) {
+                        explorer.setReadOnly(true);
+                        submitBox.setDisable(true);
+                        submitBox.setVisible(false);
+                        setStatus(statusLabel, "🔒 You have already submitted this assignment.", true);
+                    } else {
+                        explorer.setReadOnly(false);
+                        setStatus(statusLabel, "🔁 Your submission was rejected. Please revise and resubmit.", false);
+                    }
+                } else {
+                    explorer.setReadOnly(false);
+                }
+            } else {
+                explorer.setReadOnly(false);
             }
         }
     }
