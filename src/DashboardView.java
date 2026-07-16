@@ -165,8 +165,28 @@ public class DashboardView {
         VBox stat1 = createStatCard("Rank", DatabaseManager.getRankTitle(solved), Theme.ACCENT);
         VBox stat2 = createStatCard("XP Earned", (solved * 100) + " XP", Theme.SUCCESS);
         VBox stat3 = createStatCard("Completed", solved + " / " + totalProblems, Theme.WARN);
+        
+        int violations = App.db.getViolationCount(user);
+        long lockoutTime = App.db.getLockoutTimestamp(user);
+        long elapsed = System.currentTimeMillis() - lockoutTime;
+        long cooldownMs = 5 * 60 * 1000;
+        
+        String integrityVal;
+        String integrityColor;
+        
+        if (elapsed < cooldownMs) {
+            long remainingSec = (cooldownMs - elapsed) / 1000;
+            long min = remainingSec / 60;
+            long sec = remainingSec % 60;
+            integrityVal = String.format("⚠️ LOCKED (%02d:%02d)", min, sec);
+            integrityColor = Theme.DANGER;
+        } else {
+            integrityVal = violations == 0 ? "🛡️ Integrity: OK" : "⚠️ " + violations + (violations > 1 ? " Violations" : " Violation");
+            integrityColor = violations == 0 ? Theme.SUCCESS : Theme.DANGER;
+        }
+        VBox stat4 = createStatCard("Focus Integrity", integrityVal, integrityColor);
 
-        statsRow.getChildren().addAll(stat1, stat2, stat3);
+        statsRow.getChildren().addAll(stat1, stat2, stat3, stat4);
 
         // ── Continue / Reset row ──────────────────────────────────────────
         HBox quickRow = new HBox(14);

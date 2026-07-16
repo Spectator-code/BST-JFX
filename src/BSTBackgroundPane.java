@@ -23,21 +23,32 @@ public class BSTBackgroundPane extends Pane {
     private final List<DriftingTree> trees = new ArrayList<>();
     private final Random rng = new Random();
     private AnimationTimer driftTimer;
+    private double currentWidth = 0;
+    private double currentHeight = 0;
 
     public BSTBackgroundPane() {
         // Deep background matching Theme.BG
         setStyle("-fx-background-color: " + Theme.BG + ";");
         setMouseTransparent(true); // Ensure it doesn't intercept clicks/inputs
 
-        // Listen for size changes to regenerate/adjust trees to fill the viewport
-        widthProperty().addListener((obs, oldVal, newVal) -> handleResize());
-        heightProperty().addListener((obs, oldVal, newVal) -> handleResize());
+        // Listen for size changes to initialize or update boundaries
+        widthProperty().addListener((obs, oldVal, newVal) -> {
+            currentWidth = newVal.doubleValue();
+            if (trees.isEmpty() && currentWidth > 0 && currentHeight > 0) {
+                initializeTrees();
+            }
+        });
+        heightProperty().addListener((obs, oldVal, newVal) -> {
+            currentHeight = newVal.doubleValue();
+            if (trees.isEmpty() && currentWidth > 0 && currentHeight > 0) {
+                initializeTrees();
+            }
+        });
     }
 
-    private void handleResize() {
-        double w = getWidth();
-        double h = getHeight();
-        if (w <= 0 || h <= 0) return;
+    private void initializeTrees() {
+        double w = currentWidth;
+        double h = currentHeight;
 
         // Clear existing trees
         getChildren().clear();
@@ -60,7 +71,7 @@ public class BSTBackgroundPane extends Pane {
             @Override
             public void handle(long now) {
                 for (DriftingTree tree : trees) {
-                    tree.update(w, h);
+                    tree.update(currentWidth, currentHeight);
                 }
             }
         };

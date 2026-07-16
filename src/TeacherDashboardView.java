@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
 /**
  * Premium dashboard view for teachers.
  * Displays total statistics, a searchable list of registered students,
- * and a side detail panel showing exactly which of the 20 problems each student solved.
+ * and a side detail panel showing exactly which of the problems each student solved.
  */
 public class TeacherDashboardView {
 
@@ -33,6 +33,7 @@ public class TeacherDashboardView {
     private Label detailStudentViolations;
     private GridPane solvedGrid;
     private HBox statsRow;
+    private Label solvedTitle;
 
     public Parent getView() {
         StackPane rootStack = new StackPane();
@@ -202,7 +203,7 @@ public class TeacherDashboardView {
 
         detailStats.getChildren().addAll(detailStudentRank, detailStudentXP, detailStudentViolations);
 
-        Label solvedTitle = new Label("Challenge Tracker (Solved problems are highlighted in green)");
+        solvedTitle = new Label("Challenge Tracker (Solved problems are highlighted in green)");
         solvedTitle.setFont(Font.font("Arial", FontWeight.BOLD, 13));
         solvedTitle.setTextFill(Color.web(Theme.TEXT_MUTED));
 
@@ -305,7 +306,7 @@ public class TeacherDashboardView {
             Region hSpacer = new Region();
             HBox.setHgrow(hSpacer, Priority.ALWAYS);
 
-            Label progressLbl = new Label(student.solvedCount + " / 20 solved");
+            Label progressLbl = new Label(student.solvedCount + " / " + ProblemManager.getAll().size() + " solved");
             progressLbl.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
             progressLbl.setTextFill(Color.web(Theme.ACCENT));
 
@@ -419,6 +420,25 @@ public class TeacherDashboardView {
             detailStudentViolations.setStyle("-fx-background-color: #27ae601c; -fx-border-color: #27ae6050; -fx-border-radius: 8; -fx-padding: 4 12;");
             detailStudentViolations.setText("🛡️ Focus Integrity: OK");
         }
+
+        HBox actionRow = new HBox(12);
+        actionRow.setAlignment(Pos.CENTER_LEFT);
+        
+        Button resetStudentBtn = styledBtn("🔄 Reset Progress", Theme.WARN);
+        resetStudentBtn.setStyle(resetStudentBtn.getStyle() + " -fx-padding: 6 12; -fx-font-size: 11px;");
+        resetStudentBtn.setOnAction(e -> confirmResetStudent(student.username));
+        
+        Button deleteStudentBtn = styledBtn("🗑️ Delete Student", Theme.DANGER);
+        deleteStudentBtn.setStyle(deleteStudentBtn.getStyle() + " -fx-padding: 6 12; -fx-font-size: 11px;");
+        deleteStudentBtn.setOnAction(e -> confirmDeleteStudent(student.username));
+        
+        actionRow.getChildren().addAll(resetStudentBtn, deleteStudentBtn);
+
+        // Remove previous dynamic children to prevent duplicates/stale nodes
+        if (detailsContent.getChildren().size() > 2) {
+            detailsContent.getChildren().remove(2, detailsContent.getChildren().size());
+        }
+        detailsContent.getChildren().addAll(actionRow, new Separator(), solvedTitle, solvedGrid);
 
         // Build the checkmark grid of all 20 challenges
         solvedGrid.getChildren().clear();
@@ -698,6 +718,20 @@ public class TeacherDashboardView {
             VBox analyticsContainer = buildClassAnalyticsPanel();
             detailsPlaceholder.setContent(analyticsContainer);
         }
+
+        // Sync right-hand detailed view of the currently selected student
+        if (selectedStudent != null) {
+            String selUser = selectedStudent.username;
+            selectedStudent = allStudents.stream()
+                .filter(s -> s.username.equals(selUser))
+                .findFirst()
+                .orElse(null);
+            if (selectedStudent != null) {
+                showStudentDetails(selectedStudent);
+            } else {
+                showClassAnalytics();
+            }
+        }
     }
 
     private VBox buildClassAnalyticsCharts() {
@@ -925,5 +959,62 @@ public class TeacherDashboardView {
         
         // Rebuild/repopulate class visual charts
         refreshStudentList();
+    }
+
+    private void confirmResetStudent(String username) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Reset Student Progress");
+        alert.setHeaderText("Reset progress for " + username + "?");
+        alert.setContentText("This will clear all solved problems and focus violations for this student. This cannot be undone.");
+        
+        DialogPane dp = alert.getDialogPane();
+        dp.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + ";" +
+            "-fx-border-color: " + Theme.WARN + ";" +
+            "-fx-border-radius: 10;" +
+            "-fx-border-width: 1.5;"
+        );
+        dp.lookupAll(".label").forEach(n -> n.setStyle("-fx-text-fill: white;"));
+        javafx.scene.Node headerPanel = dp.lookup(".header-panel");
+        if (headerPanel != null) headerPanel.setStyle("-fx-background-color: " + Theme.NAV_BG + ";");
+
+        alert.showAndWait().ifPresent(result -> {
+            if (result == ButtonType.OK) {
+                App.db.resetProgressForUser(username);
+                showSuccessAlert("Success", "Progress reset for student '" + username + "'.");
+                refreshStudentList();
+            }
+        });
+    }
+
+    private void confirmDeleteStudent(String username) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Delete Student");
+        alert.setHeaderText("Delete account '" + username + "'?");
+        alert.setContentText("This will permanently delete the student account and all progress. This cannot be undone.");
+        
+        DialogPane dp = alert.getDialogPane();
+        dp.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + ";" +
+            "-fx-border-color: " + Theme.DANGER + ";" +
+            "-fx-border-radius: 10;" +
+            "-fx-border-width: 1.5;"
+        );
+        dp.lookupAll(".label").forEach(n -> n.setStyle("-fx-text-fill: white;"));
+        javafx.scene.Node headerPanel = dp.lookup(".header-panel");
+        if (headerPanel != null) headerPanel.setStyle("-fx-background-color: " + Theme.NAV_BG + ";");
+
+        alert.showAndWait().ifPresent(result -> {
+            if (result == ButtonType.OK) {
+                boolean success = App.db.deleteUser(username);
+                if (success) {
+                    showSuccessAlert("Success", "Student account '" + username + "' deleted.");
+                    selectedStudent = null; // deselect since they are deleted
+                    showClassAnalytics();
+                } else {
+                    showErrorAlert("Error", "Could not delete student account.");
+                }
+            }
+        });
     }
 }

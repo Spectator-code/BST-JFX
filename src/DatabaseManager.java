@@ -187,6 +187,8 @@ public class DatabaseManager {
     public void resetProgress() {
         if (currentUser == null) return;
         progress.setProperty(currentUser, "");
+        progress.setProperty(currentUser + "_violations", "0");
+        progress.setProperty(currentUser + "_lockout", "0");
         save();
     }
 
@@ -249,6 +251,53 @@ public class DatabaseManager {
         } catch (Exception e) {
             return 0;
         }
+    }
+
+    public void resetProgressForUser(String username) {
+        if (username == null) return;
+        String lowerUser = username.toLowerCase();
+        progress.setProperty(lowerUser, "");
+        progress.setProperty(lowerUser + "_violations", "0");
+        progress.setProperty(lowerUser + "_lockout", "0");
+        save();
+    }
+
+    public void clearViolationsForUser(String username) {
+        if (username == null) return;
+        String lowerUser = username.toLowerCase();
+        progress.setProperty(lowerUser + "_violations", "0");
+        progress.setProperty(lowerUser + "_lockout", "0");
+        save();
+    }
+
+    public void setLockoutTimestamp(String username, long timestamp) {
+        if (username == null) return;
+        String lowerUser = username.toLowerCase();
+        progress.setProperty(lowerUser + "_lockout", String.valueOf(timestamp));
+        save();
+    }
+
+    public long getLockoutTimestamp(String username) {
+        if (username == null) return 0;
+        String lowerUser = username.toLowerCase();
+        String val = progress.getProperty(lowerUser + "_lockout", "0");
+        try {
+            return Long.parseLong(val);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    public boolean deleteUser(String username) {
+        if (username == null) return false;
+        String lowerUser = username.toLowerCase();
+        if (!users.containsKey(lowerUser)) return false;
+        users.remove(lowerUser);
+        progress.remove(lowerUser);
+        progress.remove(lowerUser + "_violations");
+        progress.remove(lowerUser + "_lockout");
+        save();
+        return true;
     }
 
     // ── SHA-256 hashing ───────────────────────────────────────────────────

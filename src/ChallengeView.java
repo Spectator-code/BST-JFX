@@ -31,6 +31,7 @@ public class ChallengeView {
     private int warningCount = 0;
     private static final int MAX_WARNINGS = 3;
     private StackPane warningOverlay;
+    private javafx.scene.control.Button overlayDismissBtn;
     private ChangeListener<Boolean> focusListener;
     private ChangeListener<Boolean> iconifyListener;
     private boolean overlayActive = false;
@@ -42,6 +43,7 @@ public class ChallengeView {
     private VBox leftPanel;
     private ExplorerView explorer;
     private Label statusLabel;
+    private Label solvedNav;
 
     // ── Content protection state ──────────────────────────────────────────
     private StackPane toastPane;   // top-of-screen protection toast
@@ -57,6 +59,15 @@ public class ChallengeView {
     }
 
     public Parent getView() {
+        String user = App.db.getCurrentUser();
+        long lockoutTime = App.db.getLockoutTimestamp(user);
+        long elapsed = System.currentTimeMillis() - lockoutTime;
+        long cooldownMs = 5 * 60 * 1000; // 5 minutes
+
+        if (elapsed < cooldownMs && !"teacher".equals(App.db.getCurrentUserRole())) {
+            return buildLockoutScreen(cooldownMs - elapsed);
+        }
+
         // ── Root is StackPane so overlay sits on top ───────────────────────
         StackPane rootStack = new StackPane();
         BSTBackgroundPane bgPane = new BSTBackgroundPane();
@@ -73,7 +84,14 @@ public class ChallengeView {
         Button backBtn = styledBtn("← Dashboard", Theme.TEXT_MUTED);
         backBtn.setOnAction(e -> {
             detachListeners();
-            App.changeScene(new DashboardView().getView());
+            if (explorer != null) {
+                explorer.stopAllTimelines();
+            }
+            if ("teacher".equals(App.db.getCurrentUserRole())) {
+                App.changeScene(new TeacherDashboardView().getView());
+            } else {
+                App.changeScene(new DashboardView().getView());
+            }
         });
 
         Label title = new Label("⚔  Challenge Mode");
@@ -83,9 +101,9 @@ public class ChallengeView {
         // Solved counter + warning indicator in nav
         int totalSolved = App.db.getSolvedProblems().size();
         int total = ProblemManager.getAll().size();
-        Label solvedNav = new Label("✅  " + totalSolved + " / " + total + " solved");
-        solvedNav.setTextFill(Color.web(Theme.TEXT_LIGHT));
-        solvedNav.setFont(Font.font("Arial", 13));
+        this.solvedNav = new Label("✅  " + totalSolved + " / " + total + " solved");
+        this.solvedNav.setTextFill(Color.web(Theme.TEXT_LIGHT));
+        this.solvedNav.setFont(Font.font("Arial", 13));
 
         Label warningNavLabel = new Label("🛡 Focus: OK");
         warningNavLabel.setTextFill(Color.web(Theme.SUCCESS));
@@ -227,8 +245,8 @@ public class ChallengeView {
         tipsLabel.setTextFill(Color.web(Theme.TEXT_MUTED));
         tipsLabel.setTextAlignment(TextAlignment.CENTER);
 
-        Button dismissBtn = new Button("✔  I Understand — Resume Challenge");
-        dismissBtn.setFont(Font.font("Arial", FontWeight.BOLD, 14));
+        overlayDismissBtn = new Button("✔  I Understand — Resume Challenge");
+        overlayDismissBtn.setFont(Font.font("Arial", FontWeight.BOLD, 14));
         String dismissBase =
             "-fx-background-color: " + Theme.DANGER + ";" +
             "-fx-text-fill: white;" +
@@ -236,14 +254,14 @@ public class ChallengeView {
             "-fx-padding: 12 28;" +
             "-fx-cursor: hand;" +
             "-fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.3), 8, 0, 0, 0);";
-        dismissBtn.setStyle(dismissBase);
-        dismissBtn.setOnMouseEntered(e -> dismissBtn.setOpacity(0.85));
-        dismissBtn.setOnMouseExited(e  -> dismissBtn.setOpacity(1.0));
+        overlayDismissBtn.setStyle(dismissBase);
+        overlayDismissBtn.setOnMouseEntered(e -> overlayDismissBtn.setOpacity(0.85));
+        overlayDismissBtn.setOnMouseExited(e  -> overlayDismissBtn.setOpacity(1.0));
 
         // Dismissed: hide overlay, update nav label
-        dismissBtn.setOnAction(e -> hideOverlay(navStatusLabel));
+        overlayDismissBtn.setOnAction(e -> hideOverlay(navStatusLabel));
 
-        card.getChildren().addAll(icon, heading, countLabel, body, sep, tipsLabel, dismissBtn);
+        card.getChildren().addAll(icon, heading, countLabel, body, sep, tipsLabel, overlayDismissBtn);
 
         StackPane.setAlignment(card, Pos.CENTER);
         overlay.getChildren().add(card);
@@ -311,6 +329,34 @@ public class ChallengeView {
         countLabel.setText("⚠  Warning " + warningCount + " of " + MAX_WARNINGS +
             (warningCount >= MAX_WARNINGS ? " — FINAL WARNING" : ""));
         countLabel.setTextFill(Color.web(countColor));
+
+        // Update overlay button action/style based on warnings count
+        String dismissBase =
+            "-fx-background-color: " + Theme.DANGER + ";" +
+            "-fx-text-fill: white;" +
+            "-fx-background-radius: 12;" +
+            "-fx-padding: 12 28;" +
+            "-fx-cursor: hand;" +
+            "-fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.3), 8, 0, 0, 0);";
+
+        if (warningCount > MAX_WARNINGS) {
+            // Set lockout timestamp
+            App.db.setLockoutTimestamp(App.db.getCurrentUser(), System.currentTimeMillis());
+
+            overlayDismissBtn.setText("❌ Challenge Locked — Return to Dashboard");
+            overlayDismissBtn.setStyle(dismissBase.replace(Theme.DANGER, "#7c0000"));
+            overlayDismissBtn.setOnAction(e -> {
+                detachListeners();
+                if (explorer != null) {
+                    explorer.stopAllTimelines();
+                }
+                App.changeScene(new DashboardView().getView());
+            });
+        } else {
+            overlayDismissBtn.setText("✔  I Understand — Resume Challenge");
+            overlayDismissBtn.setStyle(dismissBase);
+            overlayDismissBtn.setOnAction(e -> hideOverlay(navStatusLabel));
+        }
 
         // Update nav label
         updateNavLabel(navStatusLabel);
@@ -670,6 +716,11 @@ public class ChallengeView {
             if (allPassed) {
                 App.db.markProblemSolved(id);
                 setStatus(this.statusLabel, "✅  Tests Passed! Problem solved.", true);
+                if (this.solvedNav != null) {
+                    int tSolved = App.db.getSolvedProblems().size();
+                    int tTotal = ProblemManager.getAll().size();
+                    this.solvedNav.setText("✅  " + tSolved + " / " + tTotal + " solved");
+                }
                 int nextId = id + 1;
                 if (nextId <= ProblemManager.getAll().size()) {
                     PauseTransition advance = new PauseTransition(Duration.millis(1800));
@@ -996,6 +1047,91 @@ public class ChallengeView {
                 }
             });
         });
+    }
+
+    private Parent buildLockoutScreen(long initialTimeRemainingMs) {
+        StackPane root = new StackPane();
+        root.setStyle("-fx-background-color: #0b122f;");
+
+        // Drifting background
+        BSTBackgroundPane bgPane = new BSTBackgroundPane();
+        root.getChildren().add(bgPane);
+
+        VBox card = new VBox(24);
+        card.setAlignment(Pos.CENTER);
+        card.setMaxWidth(460);
+        card.setMaxHeight(340);
+        card.setPadding(new Insets(28, 36, 28, 36));
+        card.setStyle(
+            "-fx-background-color: " + Theme.SURFACE + "dd;" +
+            "-fx-background-radius: 16;" +
+            "-fx-border-color: " + Theme.DANGER + "88;" +
+            "-fx-border-width: 1.5;" +
+            "-fx-border-radius: 16;" +
+            "-fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.4), 12, 0, 0, 4);"
+        );
+
+        Label icon = new Label("🚫");
+        icon.setFont(Font.font("Segoe UI", 48));
+
+        Label heading = new Label("Challenge Locked");
+        heading.setFont(Font.font("Arial", FontWeight.BOLD, 22));
+        heading.setTextFill(Color.web(Theme.DANGER));
+
+        Label desc = new Label("Too many window focus losses detected.\nYour access has been temporarily suspended to enforce proctoring integrity.");
+        desc.setFont(Font.font("Arial", 13));
+        desc.setTextFill(Color.web(Theme.TEXT_LIGHT));
+        desc.setTextAlignment(TextAlignment.CENTER);
+        desc.setWrapText(true);
+
+        Label timerLabel = new Label();
+        timerLabel.setFont(Font.font("Arial", FontWeight.BOLD, 18));
+        timerLabel.setTextFill(Color.web(Theme.WARN));
+
+        Button backBtn = new Button("← Return to Dashboard");
+        backBtn.setFont(Font.font("Arial", FontWeight.BOLD, 14));
+        String btnStyle =
+            "-fx-background-color: transparent;" +
+            "-fx-text-fill: " + Theme.TEXT_MUTED + ";" +
+            "-fx-border-color: " + Theme.BORDER + ";" +
+            "-fx-border-width: 1;" +
+            "-fx-border-radius: 10;" +
+            "-fx-background-radius: 10;" +
+            "-fx-padding: 10 20;" +
+            "-fx-cursor: hand;";
+        backBtn.setStyle(btnStyle);
+        backBtn.setOnMouseEntered(e -> backBtn.setStyle(btnStyle + " -fx-background-color: " + Theme.BORDER + "22;"));
+        backBtn.setOnMouseExited(e -> backBtn.setStyle(btnStyle));
+        backBtn.setOnAction(e -> App.changeScene(new DashboardView().getView()));
+
+        card.getChildren().addAll(icon, heading, desc, timerLabel, backBtn);
+        root.getChildren().add(card);
+
+        // Timeline ticker
+        final long[] remainingMs = {initialTimeRemainingMs};
+        Timeline ticker = new Timeline(new KeyFrame(Duration.seconds(1), e -> {
+            remainingMs[0] -= 1000;
+            if (remainingMs[0] <= 0) {
+                // Lock expires: clear active lockout and reload challenge view
+                App.db.clearViolationsForUser(App.db.getCurrentUser());
+                App.changeScene(new ChallengeView(currentProblemId).getView());
+            } else {
+                long min = (remainingMs[0] / 1000) / 60;
+                long sec = (remainingMs[0] / 1000) % 60;
+                timerLabel.setText(String.format("Cooldown: %02d:%02d remaining", min, sec));
+            }
+        }));
+        ticker.setCycleCount(Animation.INDEFINITE);
+        
+        long min = (remainingMs[0] / 1000) / 60;
+        long sec = (remainingMs[0] / 1000) % 60;
+        timerLabel.setText(String.format("Cooldown: %02d:%02d remaining", min, sec));
+
+        // When navigating away, stop ticker
+        backBtn.addEventHandler(javafx.event.ActionEvent.ACTION, ev -> ticker.stop());
+
+        ticker.play();
+        return root;
     }
 }
 

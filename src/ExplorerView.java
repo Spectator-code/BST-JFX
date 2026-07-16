@@ -94,7 +94,8 @@ public class ExplorerView {
     private static final Pattern SYSOUT =
             Pattern.compile("^\\s*System\\.out\\.println\\s*\\((.*)\\)\\s*;?\\s*$");
     private static final Pattern ARRAY_DECL =
-            Pattern.compile("^\\s*int\\[\\]\\s+\\w+\\s*=\\s*(?:new\\s+int\\[\\]\\s*)?\\{([^}]+)\\}\\s*;?\\s*$");
+            Pattern.compile("^\\s*int\\[\\]\\s*\\w+\\s*=\\s*(?:new\\s+int\\[\\]\\s*)?\\{([^}]+)\\}\\s*;?\\s*$",
+                    Pattern.CASE_INSENSITIVE);
     private static final Pattern FOR_EACH =
             Pattern.compile("^\\s*for\\s*\\(\\s*int\\s+\\w+\\s*:\\s*(\\w+)\\s*\\)\\s*\\{?\\s*(?:\\w+\\.)(insert|delete|search)\\s*\\(\\s*\\w+\\s*\\)\\s*;?\\s*\\}?\\s*$",
                     Pattern.CASE_INSENSITIVE);
@@ -206,7 +207,16 @@ public class ExplorerView {
         toggleCodeBtn.setOnAction(e -> toggleCodePanel());
 
         Button backBtn = styledButton("← Back", "#555555");
-        backBtn.setOnAction(e -> App.changeScene(new DashboardView().getView()));
+        backBtn.setOnAction(e -> {
+            stopAllTimelines();
+            treeSessionId++;
+            executionSessionId++;
+            if ("teacher".equals(App.db.getCurrentUserRole())) {
+                App.changeScene(new TeacherDashboardView().getView());
+            } else {
+                App.changeScene(new DashboardView().getView());
+            }
+        });
 
         HBox controls = new HBox(10, backBtn);
         controls.getChildren().addAll(zoomInBtn, zoomOutBtn, centerBtn, new Separator(Orientation.VERTICAL), toggleCodeBtn);
@@ -425,7 +435,7 @@ public class ExplorerView {
         Button bstBtn = createSidebarButton("BST", accentColorHex, "#0a0f2e");
         Button avlBtn = createSidebarOutlineButton("AVL");
         Button rbBtn = createSidebarOutlineButton("Red-Black");
-        Button btreeBtn = createSidebarOutlineButton("🔒 B-Tree");
+        Button btreeBtn = createSidebarOutlineButton("🌳 B-Tree");
         
         treeModeButtons = new Button[]{bstBtn, avlBtn, rbBtn, btreeBtn};
         activeModeButton = bstBtn;
@@ -628,10 +638,12 @@ public class ExplorerView {
         speedSlider.setSnapToTicks(true);
         HBox.setHgrow(speedSlider, Priority.ALWAYS);
         
-        speedSlider.setStyle(
-            ".slider .track { -fx-background-color: #1e2c56; -fx-background-insets: 0; -fx-background-radius: 4; }" +
-            ".slider .thumb { -fx-background-color: " + accentColorHex + "; -fx-background-radius: 10; }"
-        );
+        Platform.runLater(() -> {
+            javafx.scene.Node thumb = speedSlider.lookup(".thumb");
+            if (thumb != null) thumb.setStyle("-fx-background-color: " + accentColorHex + "; -fx-background-radius: 10;");
+            javafx.scene.Node track = speedSlider.lookup(".track");
+            if (track != null) track.setStyle("-fx-background-color: #1e2c56; -fx-background-insets: 0; -fx-background-radius: 4;");
+        });
 
         Label speedValueLabel = new Label("4");
         speedValueLabel.setTextFill(Color.web(Theme.TEAL));
@@ -706,10 +718,10 @@ public class ExplorerView {
         
         // Update speed slider accent color if it exists
         if (speedSlider != null) {
-            speedSlider.setStyle(
-                ".slider .track { -fx-background-color: #1e2c56; -fx-background-insets: 0; -fx-background-radius: 4; }" +
-                ".slider .thumb { -fx-background-color: " + hexColor + "; -fx-background-radius: 10; }"
-            );
+            javafx.scene.Node thumb = speedSlider.lookup(".thumb");
+            if (thumb != null) {
+                thumb.setStyle("-fx-background-color: " + hexColor + "; -fx-background-radius: 10;");
+            }
         }
         
         // Refresh all tree nodes immediately to use the new base color
@@ -1105,8 +1117,32 @@ public class ExplorerView {
     //  Code Execution Engine
     // ═══════════════════════════════════════════════════════════
 
+    private String preProcessCode(String code) {
+        if (code == null) return "";
+        // Strip multi-line comments
+        code = code.replaceAll("(?s)/\\*.*?\\*/", "");
+        // Strip single-line comments
+        code = code.replaceAll("//.*", "");
+        // Collapse multi-line for-each loops with braces
+        code = code.replaceAll("(?i)for\\s*\\(\\s*int\\s+(\\w+)\\s*:\\s*(\\w+)\\s*\\)\\s*\\{\\s*\\r?\\n\\s*(\\w+\\.(?:insert|delete|search)\\(\\s*\\1\\s*\\)\\s*;?)\\s*\\r?\\n\\s*\\}", "for (int $1 : $2) { $3 }");
+        // Collapse multi-line for-each loops without braces
+        code = code.replaceAll("(?i)for\\s*\\(\\s*int\\s+(\\w+)\\s*:\\s*(\\w+)\\s*\\)\\s*\\r?\\n\\s*(\\w+\\.(?:insert|delete|search)\\(\\s*\\1\\s*\\)\\s*;?)", "for (int $1 : $2) { $3 }");
+        
+        // Collapse multi-line array declarations
+        java.util.regex.Pattern arrPat = java.util.regex.Pattern.compile("(?is)int\\[\\]\\s*(\\w+)\\s*=\\s*(?:new\\s+int\\[\\]\\s*)?\\{\\s*([^}]+)\\s*\\}\\s*;?");
+        java.util.regex.Matcher arrMat = arrPat.matcher(code);
+        StringBuilder sb = new StringBuilder();
+        while (arrMat.find()) {
+            String name = arrMat.group(1);
+            String vals = arrMat.group(2).replaceAll("\\r?\\n", " ");
+            arrMat.appendReplacement(sb, "int[] " + name + " = {" + vals + "};");
+        }
+        arrMat.appendTail(sb);
+        return sb.toString();
+    }
+
     private void runCode() {
-        String code = codeArea.getText();
+        String code = preProcessCode(codeArea.getText());
         if (code == null || code.trim().isEmpty()) {
             status("No code to run");
             return;
@@ -1180,7 +1216,7 @@ public class ExplorerView {
     }
 
     private void stepNextLine() {
-        String code = codeArea.getText();
+        String code = preProcessCode(codeArea.getText());
         if (code == null || code.trim().isEmpty()) {
             status("No code to step through");
             return;
@@ -1876,6 +1912,7 @@ public class ExplorerView {
 
     private void relayout() {
         if (root == null) return;
+        recomputeHeights(root);
 
         java.util.Map<TreeNode, Double> relXMap = new java.util.HashMap<>();
         computeRelativePositions(root, relXMap);
@@ -2432,7 +2469,7 @@ public class ExplorerView {
         }
     }
 
-    private void stopAllTimelines() {
+    public void stopAllTimelines() {
         for (javafx.animation.Animation anim : activeAnimations) {
             if (anim != null) anim.stop();
         }
@@ -3087,123 +3124,75 @@ public class ExplorerView {
     private void bTreeRelayout() {
         if (bTreeRoot == null) return;
 
-        java.util.Map<BTreeNode, Double> relXMap = new java.util.HashMap<>();
-        computeBTreeRelativePositions(bTreeRoot, relXMap);
-        assignBTreeAbsoluteCoordinates(bTreeRoot, 2000, ROOT_Y, 0, relXMap);
+        // 1. Find all leaves and lay them out from left to right
+        java.util.List<BTreeNode> leaves = new java.util.ArrayList<>();
+        findBTreeLeaves(bTreeRoot, leaves);
 
-        double[] minMax = {Double.MAX_VALUE, -Double.MAX_VALUE};
-        findBTreeMinMaxX(bTreeRoot, minMax);
-        if (minMax[0] != Double.MAX_VALUE && minMax[1] != -Double.MAX_VALUE) {
-            double offset = 2000 - (minMax[0] + minMax[1]) / 2.0;
-            applyBTreeOffset(bTreeRoot, offset);
+        double gap = 40.0; // gap between nodes
+        double totalLeavesWidth = 0;
+        for (int i = 0; i < leaves.size(); i++) {
+            BTreeNode leaf = leaves.get(i);
+            double w = leaf.keys.size() * 50.0;
+            totalLeavesWidth += w;
+            if (i < leaves.size() - 1) {
+                totalLeavesWidth += gap;
+            }
         }
 
+        double nextX = 2000.0 - totalLeavesWidth / 2.0;
+        for (BTreeNode leaf : leaves) {
+            double w = leaf.keys.size() * 50.0;
+            leaf.targetX = nextX + w / 2.0;
+            leaf.targetY = ROOT_Y + getBTreeDepth(bTreeRoot, leaf) * VERTICAL_GAP;
+            nextX += w + gap;
+        }
+
+        // 2. Compute non-leaf absolute positions bottom-up / recursively
+        assignBTreeNonLeafCoordinates(bTreeRoot);
+
+        // 3. Animate to targets and update edges
         animateBTreeToTargets(bTreeRoot);
         updateBTreeEdges(bTreeRoot);
     }
 
-    private void computeBTreeRelativePositions(BTreeNode node, java.util.Map<BTreeNode, Double> relXMap) {
+    private void findBTreeLeaves(BTreeNode node, java.util.List<BTreeNode> leaves) {
         if (node == null) return;
-        for (BTreeNode child : node.children) {
-            computeBTreeRelativePositions(child, relXMap);
-        }
-
         if (node.isLeaf()) {
-            relXMap.put(node, 0.0);
+            leaves.add(node);
             return;
         }
-
-        int k = node.children.size();
-        if (k == 2) {
-            BTreeNode left = node.children.get(0);
-            BTreeNode right = node.children.get(1);
-            double leftWidth = getBTreeSubtreeWidth(left);
-            double rightWidth = getBTreeSubtreeWidth(right);
-
-            double gap = 30;
-            relXMap.put(left, -(leftWidth / 2 + gap / 2));
-            relXMap.put(right, (rightWidth / 2 + gap / 2));
-        } else if (k == 3) {
-            BTreeNode left = node.children.get(0);
-            BTreeNode center = node.children.get(1);
-            BTreeNode right = node.children.get(2);
-
-            double leftWidth = getBTreeSubtreeWidth(left);
-            double centerWidth = getBTreeSubtreeWidth(center);
-            double rightWidth = getBTreeSubtreeWidth(right);
-
-            double gap = 30;
-            relXMap.put(center, 0.0);
-            relXMap.put(left, -(centerWidth / 2 + leftWidth / 2 + gap));
-            relXMap.put(right, (centerWidth / 2 + rightWidth / 2 + gap));
-        } else if (k == 4) {
-            BTreeNode c0 = node.children.get(0);
-            BTreeNode c1 = node.children.get(1);
-            BTreeNode c2 = node.children.get(2);
-            BTreeNode c3 = node.children.get(3);
-
-            double w0 = getBTreeSubtreeWidth(c0);
-            double w1 = getBTreeSubtreeWidth(c1);
-            double w2 = getBTreeSubtreeWidth(c2);
-            double w3 = getBTreeSubtreeWidth(c3);
-
-            double gap = 20;
-            relXMap.put(c0, -(w0 / 2 + w1 + gap * 1.5));
-            relXMap.put(c1, -(w1 / 2 + gap / 2));
-            relXMap.put(c2, (w2 / 2 + gap / 2));
-            relXMap.put(c3, (w2 + w3 / 2 + gap * 1.5));
-        }
-    }
-
-    private double getBTreeSubtreeWidth(BTreeNode node) {
-        if (node == null) return 0;
-        if (node.isLeaf()) {
-            return node.keys.size() * 50 + 20;
-        }
-        double total = 0;
         for (BTreeNode child : node.children) {
-            total += getBTreeSubtreeWidth(child);
-        }
-        double gap = 30;
-        total += (node.children.size() - 1) * gap;
-        return total;
-    }
-
-    private void assignBTreeAbsoluteCoordinates(BTreeNode node, double absX, double startY, double depth, java.util.Map<BTreeNode, Double> relXMap) {
-        if (node == null) return;
-
-        node.targetX = absX;
-        node.targetY = startY + depth * VERTICAL_GAP;
-
-        if (node.isLeaf()) return;
-
-        int k = node.children.size();
-        for (int i = 0; i < k; i++) {
-            BTreeNode child = node.children.get(i);
-            double offset = relXMap.getOrDefault(child, 0.0);
-            assignBTreeAbsoluteCoordinates(child, absX + offset, startY, depth + 1, relXMap);
+            findBTreeLeaves(child, leaves);
         }
     }
 
-    private void findBTreeMinMaxX(BTreeNode node, double[] minMax) {
-        if (node == null) return;
-        double width = node.keys.size() * 50;
-        double leftX = node.targetX - width / 2;
-        double rightX = node.targetX + width / 2;
-        if (leftX < minMax[0]) minMax[0] = leftX;
-        if (rightX > minMax[1]) minMax[1] = rightX;
+    private int getBTreeDepth(BTreeNode rootNode, BTreeNode node) {
+        int depth = 0;
+        BTreeNode cur = node;
+        while (cur != rootNode && cur != null) {
+            depth++;
+            cur = cur.parent;
+        }
+        return depth;
+    }
 
+    private void assignBTreeNonLeafCoordinates(BTreeNode node) {
+        if (node == null || node.isLeaf()) return;
+
+        // Recursively layout children first
         for (BTreeNode child : node.children) {
-            findBTreeMinMaxX(child, minMax);
+            assignBTreeNonLeafCoordinates(child);
         }
-    }
 
-    private void applyBTreeOffset(BTreeNode node, double dx) {
-        if (node == null) return;
-        node.targetX += dx;
+        // Parent X is average of children's X coordinates
+        double sumX = 0;
         for (BTreeNode child : node.children) {
-            applyBTreeOffset(child, dx);
+            sumX += child.targetX;
         }
+        node.targetX = sumX / node.children.size();
+        
+        // Parent Y based on its depth
+        node.targetY = ROOT_Y + getBTreeDepth(bTreeRoot, node) * VERTICAL_GAP;
     }
 
     private void animateBTreeToTargets(BTreeNode node) {
@@ -3635,6 +3624,10 @@ public class ExplorerView {
                 if (!node.children.isEmpty()) {
                     bTreeRoot = node.children.get(0);
                     bTreeRoot.parent = null;
+                    if (bTreeRoot.edgeToParent != null) {
+                        canvas.getChildren().remove(bTreeRoot.edgeToParent);
+                        bTreeRoot.edgeToParent = null;
+                    }
                     canvas.getChildren().remove(node.group);
                     if (node.edgeToParent != null) {
                         canvas.getChildren().remove(node.edgeToParent);
