@@ -247,7 +247,7 @@ public class DashboardView {
         btn.setOnMouseEntered(e -> btn.setOpacity(0.85));
         btn.setOnMouseExited(e  -> btn.setOpacity(1.0));
         btn.setOnAction(e -> {
-            ChallengeView cv = new ChallengeView();
+            ChallengeView cv = new ChallengeView(problemId);
             // Navigate to challenge view and auto-select the correct problem
             App.changeScene(cv.getView());
         });

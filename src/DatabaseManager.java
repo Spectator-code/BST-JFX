@@ -97,18 +97,22 @@ public class DatabaseManager {
     }
 
     public boolean register(String username, String password, String role) {
-        if (users.containsKey(username)) return false;
-        users.setProperty(username, hash(password) + ":" + role.toLowerCase());
-        progress.setProperty(username, "");
+        if (username == null) return false;
+        String lowerUser = username.toLowerCase();
+        if (users.containsKey(lowerUser)) return false;
+        users.setProperty(lowerUser, hash(password) + ":" + role.toLowerCase());
+        progress.setProperty(lowerUser, "");
         save();
-        currentUser = username;
+        currentUser = lowerUser;
         currentUserRole = role.toLowerCase();
         return true;
     }
 
     // ── Login ─────────────────────────────────────────────────────────────
     public boolean login(String username, String password) {
-        String stored = users.getProperty(username);
+        if (username == null) return false;
+        String lowerUser = username.toLowerCase();
+        String stored = users.getProperty(lowerUser);
         if (stored == null) return false;
 
         String passPart = stored;
@@ -124,10 +128,10 @@ public class DatabaseManager {
         if (match) {
             // Upgrade plain-text password to hashed on first login
             if (passPart.equals(password)) {
-                users.setProperty(username, hash(password) + ":" + rolePart);
+                users.setProperty(lowerUser, hash(password) + ":" + rolePart);
                 save();
             }
-            currentUser = username;
+            currentUser = lowerUser;
             currentUserRole = rolePart.toLowerCase();
         }
         return match;
@@ -154,7 +158,8 @@ public class DatabaseManager {
 
     public List<Integer> getSolvedProblemsForUser(String username) {
         if (username == null) return new ArrayList<>();
-        String val = progress.getProperty(username, "");
+        String lowerUser = username.toLowerCase();
+        String val = progress.getProperty(lowerUser, "");
         if (val.isEmpty()) return new ArrayList<>();
         List<Integer> solved = new ArrayList<>();
         for (String s : val.split(",")) {
@@ -229,14 +234,16 @@ public class DatabaseManager {
 
     public void incrementViolationCount(String username) {
         if (username == null) return;
-        int current = getViolationCount(username);
-        progress.setProperty(username + "_violations", String.valueOf(current + 1));
+        String lowerUser = username.toLowerCase();
+        int current = getViolationCount(lowerUser);
+        progress.setProperty(lowerUser + "_violations", String.valueOf(current + 1));
         save();
     }
 
     public int getViolationCount(String username) {
         if (username == null) return 0;
-        String val = progress.getProperty(username + "_violations", "0");
+        String lowerUser = username.toLowerCase();
+        String val = progress.getProperty(lowerUser + "_violations", "0");
         try {
             return java.lang.Integer.parseInt(val);
         } catch (Exception e) {

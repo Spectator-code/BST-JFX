@@ -3,6 +3,7 @@ import javafx.animation.KeyValue;
 import javafx.animation.Timeline;
 import javafx.animation.PauseTransition;
 import javafx.animation.FadeTransition;
+import javafx.animation.ScaleTransition;
 import javafx.animation.Interpolator;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -26,6 +27,8 @@ import javafx.util.Duration;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import javafx.animation.ParallelTransition;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,13 +39,14 @@ public class ExplorerView {
 
     // ── Constants ──────────────────────────────────────────────
     private static final double ROOT_Y       = 60;
-    private static final double VERTICAL_GAP = 70;
-    private static final double MIN_H_GAP    = 50;
+    private static final double VERTICAL_GAP = 80;
+    private static final double MIN_H_GAP    = 60;
     private static final double ANIM_MS      = 350;
     private static final double EXEC_DELAY   = 700;
 
     // ── State ──────────────────────────────────────────────────
     private TreeNode root;
+    private BTreeNode bTreeRoot;
     private Pane canvas;
     private Pane viewport;
     private Label statusLabel;
@@ -50,6 +54,21 @@ public class ExplorerView {
     private VBox codePanel;
     private Button toggleCodeBtn;
     private boolean codePanelVisible = true;
+    private Label activeRotationOverlay = null;
+    private final List<Timeline> activeTimelines = new ArrayList<>();
+    private final List<javafx.animation.Animation> activeAnimations = new CopyOnWriteArrayList<>();
+
+    private void registerAnimation(javafx.animation.Animation anim) {
+        if (anim == null) return;
+        activeAnimations.add(anim);
+        anim.statusProperty().addListener((obs, oldStatus, newStatus) -> {
+            if (newStatus == javafx.animation.Animation.Status.STOPPED) {
+                activeAnimations.remove(anim);
+            }
+        });
+    }
+    private int executionSessionId = 0;
+    private int treeSessionId = 0;
     private TextArea outputArea;
     private String currentMode = "BST"; // "BST" or "AVL"
     private int executingLine = -1;
@@ -70,7 +89,7 @@ public class ExplorerView {
             Pattern.compile("^\\s*(?:\\w+\\.)(insert|delete|search|clear)\\s*\\(\\s*(\\d*)\\s*\\)\\s*;?\\s*$",
                     Pattern.CASE_INSENSITIVE);
     private static final Pattern CONSTRUCTOR =
-            Pattern.compile("^\\s*(?:BinarySearchTree|BST|AVLTree|AVL|RedBlackTree|RBT|RedBlack|TreeNode)\\s+\\w+\\s*=\\s*new\\s+(?:BinarySearchTree|BST|AVLTree|AVL|RedBlackTree|RBT|RedBlack|TreeNode)\\s*\\(\\s*\\)\\s*;?\\s*$",
+            Pattern.compile("^\\s*(?:BinarySearchTree|BST|AVLTree|AVL|RedBlackTree|RBT|RedBlack|BTree|23Tree|TreeNode)\\s+\\w+\\s*=\\s*new\\s+(?:BinarySearchTree|BST|AVLTree|AVL|RedBlackTree|RBT|RedBlack|BTree|23Tree|TreeNode)\\s*\\(\\s*\\)\\s*;?\\s*$",
                     Pattern.CASE_INSENSITIVE);
     private static final Pattern SYSOUT =
             Pattern.compile("^\\s*System\\.out\\.println\\s*\\((.*)\\)\\s*;?\\s*$");
@@ -95,11 +114,23 @@ public class ExplorerView {
     private Label inspChildren;
 
     public int getRootValue() {
+        if ("B-Tree".equals(currentMode)) {
+            return bTreeRoot == null || bTreeRoot.keys.isEmpty() ? -1 : bTreeRoot.keys.get(0);
+        }
         return root == null ? -1 : root.value;
     }
 
     public int getHeight() {
+        if ("B-Tree".equals(currentMode)) {
+            return getBTreeHeight(bTreeRoot);
+        }
         return root == null ? 0 : root.height;
+    }
+
+    private int getBTreeHeight(BTreeNode node) {
+        if (node == null) return 0;
+        if (node.isLeaf()) return 1;
+        return 1 + getBTreeHeight(node.children.get(0));
     }
 
     public ExplorerView() {
@@ -400,6 +431,7 @@ public class ExplorerView {
         activeModeButton = bstBtn;
         
         bstBtn.setOnAction(e -> {
+            if ("B-Tree".equals(currentMode)) { handleClear(); }
             setTreeModeActive(bstBtn, new Button[]{avlBtn, rbBtn, btreeBtn});
             currentMode = "BST";
             toggleBalanceLabels(false);
@@ -407,23 +439,36 @@ public class ExplorerView {
             resetColors();
         });
         avlBtn.setOnAction(e -> {
+            if ("B-Tree".equals(currentMode)) { handleClear(); }
+            treeSessionId++;
+            executionSessionId++;
+            int sessionId = treeSessionId;
             setTreeModeActive(avlBtn, new Button[]{bstBtn, rbBtn, btreeBtn});
             currentMode = "AVL";
             recomputeHeights(root);
             toggleBalanceLabels(true);
             status("Switched to AVL Tree Mode. Balancing the tree...");
-            stepwiseBalanceBST(null);
+            stepwiseBalanceBST(null, sessionId);
         });
         rbBtn.setOnAction(e -> {
+            if ("B-Tree".equals(currentMode)) { handleClear(); }
+            treeSessionId++;
+            executionSessionId++;
+            int sessionId = treeSessionId;
             setTreeModeActive(rbBtn, new Button[]{bstBtn, avlBtn, btreeBtn});
             currentMode = "Red-Black";
             toggleBalanceLabels(false);
             status("Switched to Red-Black Tree Mode. Rebuilding tree step-by-step...");
-            convertToRedBlackStepwise(null);
+            convertToRedBlackStepwise(null, sessionId);
         });
         btreeBtn.setOnAction(e -> {
+            treeSessionId++;
+            executionSessionId++;
             setTreeModeActive(btreeBtn, new Button[]{bstBtn, avlBtn, rbBtn});
-            status("B-Tree Mode is currently under development. Showing BST simulation.");
+            currentMode = "B-Tree";
+            toggleBalanceLabels(false);
+            handleClear();
+            status("Switched to B-Tree (2-3 Tree) Mode. Ready to insert nodes.");
         });
         
         treeModeContent.getChildren().addAll(bstBtn, avlBtn, rbBtn, btreeBtn);
@@ -530,21 +575,25 @@ public class ExplorerView {
         resultBox.setStyle("-fx-background-color: #0a0f2e; -fx-background-radius: 4;");
         
         inorderBtn.setOnAction(e -> {
+            if ("B-Tree".equals(currentMode)) { status("Traversals are disabled in B-Tree mode."); return; }
             List<TreeNode> path = new ArrayList<>();
             inOrder(root, path);
             animateTraversal(path, traversalResult);
         });
         preorderBtn.setOnAction(e -> {
+            if ("B-Tree".equals(currentMode)) { status("Traversals are disabled in B-Tree mode."); return; }
             List<TreeNode> path = new ArrayList<>();
             preOrder(root, path);
             animateTraversal(path, traversalResult);
         });
         postorderBtn.setOnAction(e -> {
+            if ("B-Tree".equals(currentMode)) { status("Traversals are disabled in B-Tree mode."); return; }
             List<TreeNode> path = new ArrayList<>();
             postOrder(root, path);
             animateTraversal(path, traversalResult);
         });
         levelorderBtn.setOnAction(e -> {
+            if ("B-Tree".equals(currentMode)) { status("Traversals are disabled in B-Tree mode."); return; }
             List<TreeNode> path = new ArrayList<>();
             levelOrder(root, path);
             animateTraversal(path, traversalResult);
@@ -680,6 +729,9 @@ public class ExplorerView {
 
     private void handleBatchInsert(String text) {
         if (text == null || text.trim().isEmpty()) return;
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         String[] parts = text.split(",");
         List<Integer> vals = new ArrayList<>();
         for (String p : parts) {
@@ -690,20 +742,30 @@ public class ExplorerView {
             }
         }
         if (vals.isEmpty()) return;
-        insertSequence(vals, 0);
+        insertSequence(vals, 0, sessionId);
     }
 
-    private void insertSequence(List<Integer> vals, int index) {
+    private void insertSequence(List<Integer> vals, int index, int sessionId) {
+        if (sessionId != treeSessionId) return;
+        if ("B-Tree".equals(currentMode)) {
+            insertBTreeSequence(vals, index, sessionId);
+            return;
+        }
         if (index >= vals.size()) {
             status("Batch insertion complete");
             return;
         }
         int val = vals.get(index);
-        insert(val);
+        insert(val, null, sessionId);
         highlightNode(val, Color.web("#10b981"), 800);
         
         PauseTransition pause = new PauseTransition(Duration.millis(getAnimMs() + 100));
-        pause.setOnFinished(e -> insertSequence(vals, index + 1));
+        pause.setOnFinished(e -> {
+            if (sessionId == treeSessionId) {
+                insertSequence(vals, index + 1, sessionId);
+            }
+        });
+        registerAnimation(pause);
         pause.play();
     }
 
@@ -716,22 +778,31 @@ public class ExplorerView {
     }
 
     private void loadPresetBalanced() {
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         handleClear();
         int[] vals = {40, 20, 60, 10, 30, 50, 70};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0);
+        insertSequence(list, 0, sessionId);
     }
 
     private void loadPresetSkewed() {
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         handleClear();
         int[] vals = {10, 20, 30, 40, 50, 60};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0);
+        insertSequence(list, 0, sessionId);
     }
 
     private void loadPresetRandom(int count) {
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         handleClear();
         java.util.Random rng = new java.util.Random();
         java.util.Set<Integer> used = new java.util.HashSet<>();
@@ -742,39 +813,51 @@ public class ExplorerView {
             used.add(val);
             list.add(val);
         }
-        insertSequence(list, 0);
+        insertSequence(list, 0, sessionId);
     }
 
     private void loadPresetSorted() {
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         handleClear();
         int[] vals = {10, 20, 30, 40, 50, 60, 70};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0);
+        insertSequence(list, 0, sessionId);
     }
 
     private void loadPresetZigZag() {
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         handleClear();
         int[] vals = {50, 20, 40, 30, 35};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0);
+        insertSequence(list, 0, sessionId);
     }
 
     private void loadPresetComplete() {
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         handleClear();
         int[] vals = {50, 25, 75, 12, 37, 62, 87, 6, 18, 31, 43};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0);
+        insertSequence(list, 0, sessionId);
     }
 
     private void loadPresetFibonacci() {
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         handleClear();
         int[] vals = {13, 5, 34, 2, 8, 21, 55, 1, 3, 89};
         List<Integer> list = new ArrayList<>();
         for (int v : vals) list.add(v);
-        insertSequence(list, 0);
+        insertSequence(list, 0, sessionId);
     }
 
     private void inOrder(TreeNode node, List<TreeNode> list) {
@@ -815,11 +898,14 @@ public class ExplorerView {
             resultLabel.setText("Tree is empty");
             return;
         }
+        stopAllTimelines();
         resetColors();
         resetScales(root);
         
         double stepMs = 2400.0 / animationSpeed;
         Timeline tl = new Timeline();
+        activeTimelines.add(tl);
+        tl.setOnFinished(e -> activeTimelines.remove(tl));
         StringBuilder sb = new StringBuilder();
         
         for (int i = 0; i < path.size(); i++) {
@@ -891,7 +977,21 @@ public class ExplorerView {
     }
 
     public boolean hasNode(int value) {
+        if ("B-Tree".equals(currentMode)) {
+            return findBTreeNode(bTreeRoot, value) != null;
+        }
         return find(root, value) != null;
+    }
+
+    private BTreeNode findBTreeNode(BTreeNode node, int value) {
+        if (node == null) return null;
+        if (node.keys.contains(value)) return node;
+        if (node.isLeaf()) return null;
+        int idx = 0;
+        while (idx < node.keys.size() && value > node.keys.get(idx)) {
+            idx++;
+        }
+        return findBTreeNode(node.children.get(idx), value);
     }
 
     public String getOutputLog() {
@@ -1012,6 +1112,10 @@ public class ExplorerView {
             return;
         }
 
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = executionSessionId;
+
         String[] lines = code.split("\\n");
         outputArea.clear();
         declaredArrays.clear();
@@ -1020,10 +1124,12 @@ public class ExplorerView {
         outputArea.appendText("║       ▶  Program Execution          ║\n");
         outputArea.appendText("╚══════════════════════════════════════╝\n\n");
 
-        executeLineSequence(lines, 0);
+        executeLineSequence(lines, 0, sessionId);
     }
 
-    private void executeLineSequence(String[] lines, int index) {
+    private void executeLineSequence(String[] lines, int index, int sessionId) {
+        if (sessionId != executionSessionId) return;
+
         if (index >= lines.length) {
             outputArea.appendText("\n─────────────────────────────────────\n");
             outputArea.appendText("✅ BUILD SUCCESSFUL\n");
@@ -1042,7 +1148,12 @@ public class ExplorerView {
                 outputArea.appendText("      " + padLineNum(index + 1) + " │ " + line + "\n");
             }
             PauseTransition pause = new PauseTransition(Duration.millis(100));
-            pause.setOnFinished(e -> executeLineSequence(lines, index + 1));
+            pause.setOnFinished(e -> {
+                if (sessionId == executionSessionId) {
+                    executeLineSequence(lines, index + 1, sessionId);
+                }
+            });
+            registerAnimation(pause);
             pause.play();
             return;
         }
@@ -1050,15 +1161,21 @@ public class ExplorerView {
         outputArea.appendText("  ►   " + padLineNum(index + 1) + " │ " + line + "\n");
 
         executeSingleCommand(line, (result) -> {
+            if (sessionId != executionSessionId) return;
             if (result != null) {
                 outputArea.appendText("      " + padLineNum("") + " └─➤ " + result + "\n");
             }
             outputArea.positionCaret(outputArea.getLength());
             
             // Wait a small buffer delay after the command finishes animating
-            PauseTransition pause = new PauseTransition(Duration.millis(300));
-            pause.setOnFinished(e -> executeLineSequence(lines, index + 1));
-            pause.play();
+            PauseTransition pause2 = new PauseTransition(Duration.millis(300));
+            pause2.setOnFinished(e -> {
+                if (sessionId == executionSessionId) {
+                    executeLineSequence(lines, index + 1, sessionId);
+                }
+            });
+            registerAnimation(pause2);
+            pause2.play();
         });
     }
 
@@ -1068,6 +1185,9 @@ public class ExplorerView {
             status("No code to step through");
             return;
         }
+
+        treeSessionId++;
+        executionSessionId++;
 
         String[] lines = code.split("\\n");
 
@@ -1117,12 +1237,15 @@ public class ExplorerView {
     }
 
     private void resetExecution() {
+        treeSessionId++;
+        executionSessionId++;
         executingLine = -1;
         declaredArrays.clear();
         outputArea.clear();
         outputArea.appendText("↺ Execution reset. Ready to run.\n");
         resetColors();
         resetScales(root);
+        stopAllTimelines();
         status("Execution reset");
     }
 
@@ -1153,6 +1276,13 @@ public class ExplorerView {
                     toggleBalanceLabels(false);
                 });
                 callback.accept("RedBlackTree initialized");
+            } else if (lower.contains("btree") || lower.contains("23tree")) {
+                Platform.runLater(() -> {
+                    setTreeModeActive(treeModeButtons[3], new Button[]{treeModeButtons[0], treeModeButtons[1], treeModeButtons[2]});
+                    currentMode = "B-Tree";
+                    toggleBalanceLabels(false);
+                });
+                callback.accept("B-Tree (2-3 Tree) initialized");
             } else {
                 Platform.runLater(() -> {
                     setTreeModeActive(treeModeButtons[0], new Button[]{treeModeButtons[1], treeModeButtons[2], treeModeButtons[3]});
@@ -1240,24 +1370,36 @@ public class ExplorerView {
             case "insert": {
                 if (arg.isEmpty()) { callback.accept("❌ insert requires a number"); return; }
                 int val = Integer.parseInt(arg);
-                insert(val, () -> callback.accept("Inserted node " + val));
+                if (currentMode.equals("B-Tree")) {
+                    bTreeInsert(val, () -> callback.accept("Inserted node " + val), treeSessionId);
+                } else {
+                    insert(val, () -> callback.accept("Inserted node " + val));
+                }
                 break;
             }
             case "delete": {
                 if (arg.isEmpty()) { callback.accept("❌ delete requires a number"); return; }
                 int val = Integer.parseInt(arg);
-                TreeNode target = find(root, val);
-                if (target != null) {
-                    delete(val, () -> callback.accept("Deleted node " + val));
+                if (currentMode.equals("B-Tree")) {
+                    bTreeDelete(val, () -> callback.accept("Deleted node " + val), treeSessionId);
                 } else {
-                    callback.accept("❌ Node " + val + " not found in tree");
+                    TreeNode target = find(root, val);
+                    if (target != null) {
+                        delete(val, () -> callback.accept("Deleted node " + val));
+                    } else {
+                        callback.accept("❌ Node " + val + " not found in tree");
+                    }
                 }
                 break;
             }
             case "search": {
                 if (arg.isEmpty()) { callback.accept("❌ search requires a number"); return; }
                 int val = Integer.parseInt(arg);
-                search(val, (found) -> callback.accept(found ? "✔ Found node " + val : "✘ Node " + val + " not found"));
+                if (currentMode.equals("B-Tree")) {
+                    bTreeSearch(val, (found) -> callback.accept(found ? "✔ Found node " + val : "✘ Node " + val + " not found"), treeSessionId);
+                } else {
+                    search(val, (found) -> callback.accept(found ? "✔ Found node " + val : "✘ Node " + val + " not found"));
+                }
                 break;
             }
             case "clear": {
@@ -1295,6 +1437,7 @@ public class ExplorerView {
             return;
         }
 
+        stopAllTimelines();
         resetColors();
         resetScales(root);
 
@@ -1310,6 +1453,8 @@ public class ExplorerView {
         canvas.getChildren().add(pointer);
 
         Timeline tl = new Timeline();
+        activeTimelines.add(tl);
+        tl.setOnFinished(e -> activeTimelines.remove(tl));
 
         // Animate node-to-node
         for (int i = 0; i < path.size(); i++) {
@@ -1417,6 +1562,7 @@ public class ExplorerView {
             node.label.setScaleX(1.0);
             node.label.setScaleY(1.0);
         });
+        registerAnimation(reset);
         reset.play();
     }
 
@@ -1425,10 +1571,15 @@ public class ExplorerView {
     // ═══════════════════════════════════════════════════════════
 
     private void insert(int value) {
-        insert(value, null);
+        insert(value, null, treeSessionId);
     }
 
     private void insert(int value, Runnable onFinished) {
+        insert(value, onFinished, treeSessionId);
+    }
+
+    private void insert(int value, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
         if (root == null) {
             root = new TreeNode(value);
             // Start the root at X=2000 (center of our virtual 4000x4000 space)
@@ -1458,6 +1609,7 @@ public class ExplorerView {
         TreeNode finalParent = parent;
 
         animatePointerPath(path, stepMs, Color.web("#f39c12"), () -> {
+            if (sessionId != treeSessionId) return;
             TreeNode newNode = new TreeNode(value);
             newNode.parent = finalParent;
             if (value < finalParent.value) {
@@ -1469,9 +1621,9 @@ public class ExplorerView {
             addNodeToCanvas(newNode);
 
             if (currentMode.equals("AVL")) {
-                balanceTreeAfterInsert(newNode, onFinished);
+                balanceTreeAfterInsert(newNode, onFinished, sessionId);
             } else if (currentMode.equals("Red-Black")) {
-                balanceTreeAfterInsertRB(newNode, onFinished);
+                balanceTreeAfterInsertRB(newNode, onFinished, sessionId);
             } else {
                 relayout();
                 status("Inserted: " + value);
@@ -1481,10 +1633,15 @@ public class ExplorerView {
     }
 
     private void delete(int value) {
-        delete(value, null);
+        delete(value, null, treeSessionId);
     }
 
     private void delete(int value, Runnable onFinished) {
+        delete(value, onFinished, treeSessionId);
+    }
+
+    private void delete(int value, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
         TreeNode target = find(root, value);
         if (target == null) {
             status("Value " + value + " not found");
@@ -1503,6 +1660,7 @@ public class ExplorerView {
 
         double stepMs = 2400.0 / animationSpeed;
         animatePointerPath(path, stepMs, Color.web("#ef4444"), () -> {
+            if (sessionId != treeSessionId) return;
             TreeNode startBalanceNode = null;
             if (target.left == null && target.right == null) {
                 startBalanceNode = target.parent;
@@ -1519,10 +1677,10 @@ public class ExplorerView {
             deleteNode(target);
 
             if (currentMode.equals("AVL")) {
-                balanceTreeAfterDelete(startBalanceNode, onFinished);
+                balanceTreeAfterDelete(startBalanceNode, onFinished, sessionId);
             } else if (currentMode.equals("Red-Black")) {
                 status("Deleted " + value + ". Rebuilding Red-Black Tree...");
-                convertToRedBlackStepwise(onFinished);
+                convertToRedBlackStepwise(onFinished, sessionId);
             } else {
                 relayout();
                 status("Deleted: " + value);
@@ -1578,10 +1736,15 @@ public class ExplorerView {
     }
 
     private void search(int value) {
-        search(value, null);
+        search(value, null, treeSessionId);
     }
 
     private void search(int value, java.util.function.Consumer<Boolean> onFinished) {
+        search(value, onFinished, treeSessionId);
+    }
+
+    private void search(int value, java.util.function.Consumer<Boolean> onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
         resetColors();
         TreeNode cur = root;
         List<TreeNode> path = new ArrayList<>();
@@ -1596,6 +1759,7 @@ public class ExplorerView {
         Color finalCol = found ? Color.web("#27ae60") : Color.web("#c0392b");
 
         animatePointerPath(path, stepMs, finalCol, () -> {
+            if (sessionId != treeSessionId) return;
             status(found ? "Found " + value : "Value " + value + " not in tree");
             if (onFinished != null) onFinished.accept(found);
         });
@@ -1605,32 +1769,126 @@ public class ExplorerView {
     //  Layout Engine
     // ═══════════════════════════════════════════════════════════
 
-    private void relayout() {
-        if (root == null) return;
-        
-        // We calculate distribution based on a logical width
-        // and then center the entire structure around X=2000
-        int count = countNodes(root);
-        double logicalW = Math.max(800, count * 60);
-        double spacing = Math.max(MIN_H_GAP, logicalW / (count + 1));
-
-        int[] idx = {0};
-        assignInOrder(root, idx, spacing, 0);
-
-        double treeWidth = count * spacing;
-        // Center the tree horizontally around X=2000
-        double offset = 2000 - (treeWidth / 2);
-        applyOffset(root, offset);
-
-        animateToTargets(root);
+    private static class LayoutData {
+        double relX;
+        List<Double> leftContour = new ArrayList<>();
+        List<Double> rightContour = new ArrayList<>();
     }
 
-    private void assignInOrder(TreeNode node, int[] idx, double spacing, int depth) {
+    private LayoutData computeRelativePositions(TreeNode node, java.util.Map<TreeNode, Double> relXMap) {
+        if (node == null) return null;
+
+        LayoutData data = new LayoutData();
+
+        if (node.left == null && node.right == null) {
+            data.relX = 0;
+            data.leftContour.add(0.0);
+            data.rightContour.add(0.0);
+            return data;
+        }
+
+        LayoutData leftData = computeRelativePositions(node.left, relXMap);
+        LayoutData rightData = computeRelativePositions(node.right, relXMap);
+
+        if (leftData != null && rightData != null) {
+            double maxOverlapShift = MIN_H_GAP;
+            int overlapDepth = Math.min(leftData.rightContour.size(), rightData.leftContour.size());
+            for (int i = 0; i < overlapDepth; i++) {
+                double leftRightContour = leftData.rightContour.get(i);
+                double rightLeftContour = rightData.leftContour.get(i);
+                double shift = leftRightContour - rightLeftContour + MIN_H_GAP;
+                if (shift > maxOverlapShift) {
+                    maxOverlapShift = shift;
+                }
+            }
+
+            double leftOffset = -maxOverlapShift / 2.0;
+            double rightOffset = maxOverlapShift / 2.0;
+
+            relXMap.put(node, maxOverlapShift);
+
+            data.relX = 0;
+            data.leftContour.add(0.0);
+            data.rightContour.add(0.0);
+
+            int maxContourSize = Math.max(leftData.leftContour.size(), rightData.leftContour.size());
+            for (int i = 0; i < maxContourSize; i++) {
+                double leftVal = (i < leftData.leftContour.size()) 
+                    ? (leftOffset + leftData.leftContour.get(i)) 
+                    : (rightOffset + rightData.leftContour.get(i));
+                data.leftContour.add(leftVal);
+
+                double rightVal = (i < rightData.rightContour.size()) 
+                    ? (rightOffset + rightData.rightContour.get(i)) 
+                    : (leftOffset + leftData.rightContour.get(i));
+                data.rightContour.add(rightVal);
+            }
+        } else if (leftData != null) {
+            double leftOffset = -MIN_H_GAP;
+            data.relX = 0;
+            data.leftContour.add(0.0);
+            data.rightContour.add(0.0);
+            for (double val : leftData.leftContour) {
+                data.leftContour.add(leftOffset + val);
+            }
+            for (double val : leftData.rightContour) {
+                data.rightContour.add(leftOffset + val);
+            }
+        } else {
+            double rightOffset = MIN_H_GAP;
+            data.relX = 0;
+            data.leftContour.add(0.0);
+            data.rightContour.add(0.0);
+            for (double val : rightData.leftContour) {
+                data.leftContour.add(rightOffset + val);
+            }
+            for (double val : rightData.rightContour) {
+                data.rightContour.add(rightOffset + val);
+            }
+        }
+
+        return data;
+    }
+
+    private void assignAbsoluteCoordinates(TreeNode node, double absX, int depth, java.util.Map<TreeNode, Double> relXMap) {
         if (node == null) return;
-        assignInOrder(node.left, idx, spacing, depth + 1);
-        node.targetX = spacing * (idx[0]++) + spacing / 2;
+        node.targetX = absX;
         node.targetY = ROOT_Y + depth * VERTICAL_GAP;
-        assignInOrder(node.right, idx, spacing, depth + 1);
+
+        if (node.left != null && node.right != null) {
+            double shift = relXMap.getOrDefault(node, MIN_H_GAP);
+            assignAbsoluteCoordinates(node.left, absX - shift / 2.0, depth + 1, relXMap);
+            assignAbsoluteCoordinates(node.right, absX + shift / 2.0, depth + 1, relXMap);
+        } else if (node.left != null) {
+            assignAbsoluteCoordinates(node.left, absX - MIN_H_GAP, depth + 1, relXMap);
+        } else if (node.right != null) {
+            assignAbsoluteCoordinates(node.right, absX + MIN_H_GAP, depth + 1, relXMap);
+        }
+    }
+
+    private void findMinMaxX(TreeNode node, double[] minMax) {
+        if (node == null) return;
+        if (node.targetX < minMax[0]) minMax[0] = node.targetX;
+        if (node.targetX > minMax[1]) minMax[1] = node.targetX;
+        findMinMaxX(node.left, minMax);
+        findMinMaxX(node.right, minMax);
+    }
+
+    private void relayout() {
+        if (root == null) return;
+
+        java.util.Map<TreeNode, Double> relXMap = new java.util.HashMap<>();
+        computeRelativePositions(root, relXMap);
+        assignAbsoluteCoordinates(root, 2000, 0, relXMap);
+
+        double[] minMax = {Double.MAX_VALUE, -Double.MAX_VALUE};
+        findMinMaxX(root, minMax);
+        if (minMax[0] != Double.MAX_VALUE && minMax[1] != -Double.MAX_VALUE) {
+            double offset = 2000 - (minMax[0] + minMax[1]) / 2.0;
+            applyOffset(root, offset);
+        }
+
+        animateToTargets(root);
     }
 
     private void applyOffset(TreeNode node, double dx) {
@@ -1672,6 +1930,7 @@ public class ExplorerView {
                 node.circle.setCenterY(y);
             }
         };
+        registerAnimation(transition);
         transition.play();
 
         animateToTargets(node.left);
@@ -1762,21 +2021,23 @@ public class ExplorerView {
         }
         if (replacement != null) {
             replacement.parent = old.parent;
-            if (old.edgeToParent != null) {
+            if (replacement.parent == null) {
                 if (replacement.edgeToParent != null) {
-                    canvas.getChildren().remove(replacement.edgeToParent);
-                }
-                replacement.edgeToParent = old.edgeToParent;
-                // Rebind edge start to new parent if it exists
-                if (replacement.parent != null) {
-                    replacement.edgeToParent.startXProperty().bind(replacement.parent.circle.centerXProperty());
-                    replacement.edgeToParent.startYProperty().bind(replacement.parent.circle.centerYProperty().add(24));
-                } else {
                     canvas.getChildren().remove(replacement.edgeToParent);
                     replacement.edgeToParent = null;
                 }
-                // Rebind edge end to replacement
+            } else {
                 if (replacement.edgeToParent != null) {
+                    canvas.getChildren().remove(replacement.edgeToParent);
+                    replacement.edgeToParent = null;
+                }
+                if (old.edgeToParent != null) {
+                    replacement.edgeToParent = old.edgeToParent;
+                    old.edgeToParent = null;
+                }
+                if (replacement.edgeToParent != null) {
+                    replacement.edgeToParent.startXProperty().bind(replacement.parent.circle.centerXProperty());
+                    replacement.edgeToParent.startYProperty().bind(replacement.parent.circle.centerYProperty().add(24));
                     replacement.edgeToParent.endXProperty().bind(replacement.circle.centerXProperty());
                     replacement.edgeToParent.endYProperty().bind(replacement.circle.centerYProperty().subtract(24));
                 }
@@ -1790,7 +2051,11 @@ public class ExplorerView {
     }
 
     private void resetColors() {
-        resetColorsRec(root);
+        if ("B-Tree".equals(currentMode)) {
+            resetBTreeColors(bTreeRoot);
+        } else {
+            resetColorsRec(root);
+        }
     }
     private void resetColorsRec(TreeNode n) {
         if (n == null) return;
@@ -1852,34 +2117,64 @@ public class ExplorerView {
     private void handleInsert(TextField tf) {
         Integer v = parseField(tf);
         if (v != null) {
-            insert(v);
-            highlightNode(v, Color.web("#27ae60"), 800);
+            treeSessionId++;
+            stopAllTimelines();
+            if ("B-Tree".equals(currentMode)) {
+                bTreeInsert(v, null, treeSessionId);
+            } else {
+                insert(v, null, treeSessionId);
+                highlightNode(v, Color.web("#27ae60"), 800);
+            }
         }
     }
     private void handleDelete(TextField tf) {
         Integer v = parseField(tf);
-        if (v != null) delete(v);
+        if (v != null) {
+            treeSessionId++;
+            stopAllTimelines();
+            if ("B-Tree".equals(currentMode)) {
+                bTreeDelete(v, null, treeSessionId);
+            } else {
+                delete(v, null, treeSessionId);
+            }
+        }
     }
     private void handleSearch(TextField tf) {
         Integer v = parseField(tf);
-        if (v != null) search(v);
+        if (v != null) {
+            treeSessionId++;
+            stopAllTimelines();
+            if ("B-Tree".equals(currentMode)) {
+                bTreeSearch(v, null, treeSessionId);
+            } else {
+                search(v, null, treeSessionId);
+            }
+        }
     }
     private void handleRandom() {
+        treeSessionId++;
+        executionSessionId++;
+        int sessionId = treeSessionId;
         handleClear();
         java.util.Random rng = new java.util.Random();
         int count = 7 + rng.nextInt(6);
         java.util.Set<Integer> used = new java.util.HashSet<>();
+        List<Integer> list = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             int val;
             do { val = rng.nextInt(99) + 1; } while (used.contains(val));
             used.add(val);
-            insert(val);
+            list.add(val);
         }
+        insertSequence(list, 0, sessionId);
         status("Generated random tree with " + count + " nodes");
     }
     public void handleClear() {
         root = null;
+        bTreeRoot = null;
         canvas.getChildren().clear();
+        removeRotationOverlay();
+        stopAllTimelines();
         status("Tree cleared");
         // Optional: Reset zoom and pan on clear
         // scaleTransform.setX(1.0); scaleTransform.setY(1.0);
@@ -2071,26 +2366,135 @@ public class ExplorerView {
         toggleBalanceLabelsRec(n.right, visible);
     }
 
-    private void highlightRotationNodes(TreeNode node1, TreeNode node2, TreeNode node3) {
-        resetColors();
-        if (node1 != null) {
-            node1.circle.setFill(Color.web("#e67e22")); // Orange for unbalanced root
-            node1.circle.setScaleX(1.15);
-            node1.circle.setScaleY(1.15);
-        }
-        if (node2 != null) {
-            node2.circle.setFill(Color.web("#9b5de5")); // Violet for pivot child
-            node2.circle.setScaleX(1.15);
-            node2.circle.setScaleY(1.15);
-        }
-        if (node3 != null) {
-            node3.circle.setFill(Color.web("#f1c40f")); // Yellow for grandchild
-            node3.circle.setScaleX(1.15);
-            node3.circle.setScaleY(1.15);
+    private void showRotationOverlay(TreeNode node, String text) {
+        removeRotationOverlayImmediate();
+
+        Label label = new Label(text);
+        label.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+        label.setTextFill(Color.WHITE);
+        label.setStyle(
+            "-fx-background-color: rgba(15, 23, 42, 0.95);" +
+            "-fx-background-radius: 6;" +
+            "-fx-border-color: #f1c40f;" +
+            "-fx-border-width: 1.5;" +
+            "-fx-border-radius: 6;" +
+            "-fx-padding: 6 12;" +
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.5), 10, 0, 0, 2);"
+        );
+
+        label.layoutXProperty().bind(node.circle.centerXProperty().subtract(label.widthProperty().divide(2.0)));
+        label.layoutYProperty().bind(node.circle.centerYProperty().subtract(60));
+
+        label.setOpacity(0);
+        label.setScaleX(0.85);
+        label.setScaleY(0.85);
+        canvas.getChildren().add(label);
+
+        FadeTransition ft = new FadeTransition(Duration.millis(250), label);
+        ft.setFromValue(0);
+        ft.setToValue(1);
+
+        ScaleTransition st = new ScaleTransition(Duration.millis(250), label);
+        st.setFromX(0.85); st.setFromY(0.85);
+        st.setToX(1.0); st.setToY(1.0);
+
+        ParallelTransition pt = new ParallelTransition(ft, st);
+        registerAnimation(pt);
+        pt.play();
+
+        activeRotationOverlay = label;
+    }
+
+    private void removeRotationOverlay() {
+        if (activeRotationOverlay != null) {
+            Label temp = activeRotationOverlay;
+            activeRotationOverlay = null;
+
+            FadeTransition ft = new FadeTransition(Duration.millis(200), temp);
+            ft.setFromValue(1.0);
+            ft.setToValue(0.0);
+
+            ScaleTransition st = new ScaleTransition(Duration.millis(200), temp);
+            st.setFromX(1.0); st.setFromY(1.0);
+            st.setToX(0.85); st.setToY(0.85);
+
+            ParallelTransition pt = new ParallelTransition(ft, st);
+            pt.setOnFinished(e -> canvas.getChildren().remove(temp));
+            registerAnimation(pt);
+            pt.play();
         }
     }
 
-    private void checkAndRotateStep(TreeNode curr, Runnable onFinished) {
+    private void removeRotationOverlayImmediate() {
+        if (activeRotationOverlay != null) {
+            canvas.getChildren().remove(activeRotationOverlay);
+            activeRotationOverlay = null;
+        }
+    }
+
+    private void stopAllTimelines() {
+        for (javafx.animation.Animation anim : activeAnimations) {
+            if (anim != null) anim.stop();
+        }
+        activeAnimations.clear();
+
+        for (Timeline tl : activeTimelines) {
+            if (tl != null) tl.stop();
+        }
+        activeTimelines.clear();
+
+        removeRotationOverlayImmediate();
+        resetVisuals();
+    }
+
+    private void resetVisuals() {
+        resetColors();
+        resetScales(root);
+    }
+
+    private void pulseScale(TreeNode node) {
+        ScaleTransition st = new ScaleTransition(Duration.millis(350), node.circle);
+        st.setFromX(1.0); st.setFromY(1.0);
+        st.setToX(1.2); st.setToY(1.2);
+        st.setAutoReverse(true);
+        st.setCycleCount(2);
+        st.play();
+
+        ScaleTransition stLbl = new ScaleTransition(Duration.millis(350), node.label);
+        stLbl.setFromX(1.0); stLbl.setFromY(1.0);
+        stLbl.setToX(1.15); stLbl.setToY(1.15);
+        stLbl.setAutoReverse(true);
+        stLbl.setCycleCount(2);
+        stLbl.play();
+    }
+
+    private void highlightRotationNodes(TreeNode node1, TreeNode node2, TreeNode node3) {
+        resetColors();
+        if (node1 != null) {
+            node1.circle.setFill(Color.web("#e67e22"));
+            node1.circle.setStroke(Color.web("#ff9f43"));
+            node1.circle.setStrokeWidth(3.5);
+            node1.circle.setEffect(new DropShadow(20, Color.web("#ff9f43")));
+            pulseScale(node1);
+        }
+        if (node2 != null) {
+            node2.circle.setFill(Color.web("#d35400"));
+            node2.circle.setStroke(Color.web("#ff9f43"));
+            node2.circle.setStrokeWidth(3.5);
+            node2.circle.setEffect(new DropShadow(20, Color.web("#ff9f43")));
+            pulseScale(node2);
+        }
+        if (node3 != null) {
+            node3.circle.setFill(Color.web("#f1c40f"));
+            node3.circle.setStroke(Color.web("#ffeaa7"));
+            node3.circle.setStrokeWidth(3.5);
+            node3.circle.setEffect(new DropShadow(20, Color.web("#f1c40f")));
+            pulseScale(node3);
+        }
+    }
+
+    private void checkAndRotateStep(TreeNode curr, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
         if (curr == null) {
             recomputeHeights(root);
             rebindEdgesRec(root);
@@ -2103,7 +2507,7 @@ public class ExplorerView {
         int balance = getBalance(curr);
 
         if (balance >= -1 && balance <= 1) {
-            checkAndRotateStep(curr.parent, onFinished);
+            checkAndRotateStep(curr.parent, onFinished, sessionId);
             return;
         }
 
@@ -2115,7 +2519,7 @@ public class ExplorerView {
         if (balance > 1) {
             child = curr.left;
             if (getBalance(child) >= 0) {
-                caseName = "Left-Left Case (Single Right Rotation)";
+                caseName = "Left-Left Case (Rotate Right)";
                 grandchild = child.left;
             } else {
                 caseName = "Left-Right Case (Double Rotation)";
@@ -2124,7 +2528,7 @@ public class ExplorerView {
         } else {
             child = curr.right;
             if (getBalance(child) <= 0) {
-                caseName = "Right-Right Case (Single Left Rotation)";
+                caseName = "Right-Right Case (Rotate Left)";
                 grandchild = child.right;
             } else {
                 caseName = "Right-Left Case (Double Rotation)";
@@ -2139,15 +2543,20 @@ public class ExplorerView {
 
         status("⚠️ Imbalance detected at " + unbalancedVal + " (BF = " + balance + "). " + finalCaseName + ".");
         highlightRotationNodes(curr, child, grandchild);
+        showRotationOverlay(curr, finalCaseName);
 
         double delayMs = getExecDelay();
         PauseTransition pause = new PauseTransition(Duration.millis(delayMs));
         pause.setOnFinished(e -> {
+            if (sessionId != treeSessionId) return;
             TreeNode newSubtreeRoot = null;
             if (balance > 1) {
                 if (getBalance(finalChild) >= 0) {
                     newSubtreeRoot = rotateRight(curr);
+                    removeRotationOverlay();
                 } else {
+                    status("⚠️ Left-Right Case: Step 1 - Left Rotating Child " + finalChild.value);
+                    showRotationOverlay(curr, "LR Case: Step 1 - Left Rotate Child " + finalChild.value);
                     curr.left = rotateLeft(finalChild);
                     rebindEdgesRec(root);
                     relayout();
@@ -2155,24 +2564,33 @@ public class ExplorerView {
                     PauseTransition secondPause = new PauseTransition(Duration.millis(delayMs));
                     TreeNode finalCurr = curr;
                     secondPause.setOnFinished(e2 -> {
-                        status("⚠️ Left-Right Case: Performing final Right Rotation at " + unbalancedVal + ".");
+                        if (sessionId != treeSessionId) return;
+                        status("⚠️ Left-Right Case: Step 2 - Right Rotating Root " + unbalancedVal);
+                        showRotationOverlay(finalCurr, "LR Case: Step 2 - Right Rotate Root " + unbalancedVal);
                         highlightRotationNodes(finalCurr, finalCurr.left, finalCurr.left.left);
                         PauseTransition thirdPause = new PauseTransition(Duration.millis(delayMs));
                         thirdPause.setOnFinished(e3 -> {
+                            if (sessionId != treeSessionId) return;
                             TreeNode rotNode = rotateRight(finalCurr);
                             rebindEdgesRec(root);
                             relayout();
-                            checkAndRotateStep(rotNode.parent, onFinished);
+                            removeRotationOverlay();
+                            checkAndRotateStep(rotNode.parent, onFinished, sessionId);
                         });
+                        registerAnimation(thirdPause);
                         thirdPause.play();
                     });
+                    registerAnimation(secondPause);
                     secondPause.play();
                     return;
                 }
             } else {
                 if (getBalance(finalChild) <= 0) {
                     newSubtreeRoot = rotateLeft(curr);
+                    removeRotationOverlay();
                 } else {
+                    status("⚠️ Right-Left Case: Step 1 - Right Rotating Child " + finalChild.value);
+                    showRotationOverlay(curr, "RL Case: Step 1 - Right Rotate Child " + finalChild.value);
                     curr.right = rotateRight(finalChild);
                     rebindEdgesRec(root);
                     relayout();
@@ -2180,17 +2598,23 @@ public class ExplorerView {
                     PauseTransition secondPause = new PauseTransition(Duration.millis(delayMs));
                     TreeNode finalCurr = curr;
                     secondPause.setOnFinished(e2 -> {
-                        status("⚠️ Right-Left Case: Performing final Left Rotation at " + unbalancedVal + ".");
+                        if (sessionId != treeSessionId) return;
+                        status("⚠️ Right-Left Case: Step 2 - Left Rotating Root " + unbalancedVal);
+                        showRotationOverlay(finalCurr, "RL Case: Step 2 - Left Rotate Root " + unbalancedVal);
                         highlightRotationNodes(finalCurr, finalCurr.right, finalCurr.right.right);
                         PauseTransition thirdPause = new PauseTransition(Duration.millis(delayMs));
                         thirdPause.setOnFinished(e3 -> {
+                            if (sessionId != treeSessionId) return;
                             TreeNode rotNode = rotateLeft(finalCurr);
                             rebindEdgesRec(root);
                             relayout();
-                            checkAndRotateStep(rotNode.parent, onFinished);
+                            removeRotationOverlay();
+                            checkAndRotateStep(rotNode.parent, onFinished, sessionId);
                         });
+                        registerAnimation(thirdPause);
                         thirdPause.play();
                     });
+                    registerAnimation(secondPause);
                     secondPause.play();
                     return;
                 }
@@ -2198,21 +2622,22 @@ public class ExplorerView {
 
             rebindEdgesRec(root);
             relayout();
-            checkAndRotateStep(newSubtreeRoot.parent, onFinished);
+            checkAndRotateStep(newSubtreeRoot.parent, onFinished, sessionId);
         });
+        registerAnimation(pause);
         pause.play();
     }
 
-    private void balanceTreeAfterInsert(TreeNode newNode, Runnable onFinished) {
-        checkAndRotateStep(newNode.parent, onFinished);
+    private void balanceTreeAfterInsert(TreeNode newNode, Runnable onFinished, int sessionId) {
+        checkAndRotateStep(newNode.parent, onFinished, sessionId);
     }
 
-    private void balanceTreeAfterDelete(TreeNode startNode, Runnable onFinished) {
-        checkAndRotateStep(startNode, onFinished);
+    private void balanceTreeAfterDelete(TreeNode startNode, Runnable onFinished, int sessionId) {
+        checkAndRotateStep(startNode, onFinished, sessionId);
     }
 
-    private void balanceTreeAfterInsertRB(TreeNode newNode, Runnable onFinished) {
-        checkAndBalanceRBStep(newNode, onFinished);
+    private void balanceTreeAfterInsertRB(TreeNode newNode, Runnable onFinished, int sessionId) {
+        checkAndBalanceRBStep(newNode, onFinished, sessionId);
     }
 
     private void highlightRBNodes(TreeNode n, TreeNode p, TreeNode u, TreeNode g) {
@@ -2233,9 +2658,77 @@ public class ExplorerView {
             g.circle.setStroke(Color.web("#9b5de5")); // Purple for grandparent
             g.circle.setStrokeWidth(3.5);
         }
+        flashViolatingEdge(n);
+        flashViolatingNodes(n, p);
     }
 
-    private void checkAndBalanceRBStep(TreeNode n, Runnable onFinished) {
+    private void flashViolatingEdge(TreeNode child) {
+        if (child == null || child.edgeToParent == null) return;
+        Line edge = child.edgeToParent;
+        edge.setStroke(Color.web("#ff3333"));
+        edge.setStrokeWidth(4.0);
+
+        Timeline tl = new Timeline(
+            new KeyFrame(Duration.ZERO, 
+                new KeyValue(edge.strokeProperty(), Color.web("#ff3333")), 
+                new KeyValue(edge.strokeWidthProperty(), 4.0)
+            ),
+            new KeyFrame(Duration.millis(300), 
+                new KeyValue(edge.strokeProperty(), Color.web("#ffb3b3")), 
+                new KeyValue(edge.strokeWidthProperty(), 2.5)
+            ),
+            new KeyFrame(Duration.millis(600), 
+                new KeyValue(edge.strokeProperty(), Color.web("#ff3333")), 
+                new KeyValue(edge.strokeWidthProperty(), 4.0)
+            )
+        );
+        tl.setCycleCount(3);
+        activeTimelines.add(tl);
+        tl.setOnFinished(e -> {
+            activeTimelines.remove(tl);
+            edge.setStroke(Color.web("#ff3333"));
+            edge.setStrokeWidth(3.5);
+        });
+        tl.play();
+    }
+
+    private void flashViolatingNodes(TreeNode n, TreeNode p) {
+        if (n == null || p == null) return;
+
+        Timeline tl = new Timeline(
+            new KeyFrame(Duration.ZERO, 
+                new KeyValue(n.circle.strokeProperty(), Color.web("#ff3333")), 
+                new KeyValue(p.circle.strokeProperty(), Color.web("#ff3333")),
+                new KeyValue(n.circle.strokeWidthProperty(), 3.5),
+                new KeyValue(p.circle.strokeWidthProperty(), 3.5)
+            ),
+            new KeyFrame(Duration.millis(300), 
+                new KeyValue(n.circle.strokeProperty(), Color.web("#ffffff")), 
+                new KeyValue(p.circle.strokeProperty(), Color.web("#ffffff")),
+                new KeyValue(n.circle.strokeWidthProperty(), 2.0),
+                new KeyValue(p.circle.strokeWidthProperty(), 2.0)
+            ),
+            new KeyFrame(Duration.millis(600), 
+                new KeyValue(n.circle.strokeProperty(), Color.web("#ff3333")), 
+                new KeyValue(p.circle.strokeProperty(), Color.web("#ff3333")),
+                new KeyValue(n.circle.strokeWidthProperty(), 3.5),
+                new KeyValue(p.circle.strokeWidthProperty(), 3.5)
+            )
+        );
+        tl.setCycleCount(3);
+        activeTimelines.add(tl);
+        tl.setOnFinished(e -> {
+            activeTimelines.remove(tl);
+            n.circle.setStroke(Color.web("#ff3333"));
+            n.circle.setStrokeWidth(3.5);
+            p.circle.setStroke(Color.web("#ff3333"));
+            p.circle.setStrokeWidth(3.5);
+        });
+        tl.play();
+    }
+
+    private void checkAndBalanceRBStep(TreeNode n, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
         if (n == null) {
             if (root != null && root.isRed) {
                 root.isRed = false;
@@ -2243,6 +2736,7 @@ public class ExplorerView {
             }
             rebindEdgesRec(root);
             relayout();
+            removeRotationOverlay();
             if (onFinished != null) onFinished.run();
             return;
         }
@@ -2260,7 +2754,7 @@ public class ExplorerView {
             if (g == null) {
                 p.isRed = false;
                 resetColors();
-                checkAndBalanceRBStep(p, onFinished);
+                checkAndBalanceRBStep(p, onFinished, sessionId);
                 return;
             }
 
@@ -2270,16 +2764,20 @@ public class ExplorerView {
             if (u != null && u.isRed) {
                 status("⚠️ Double Red Violation (Parent " + p.value + " & Uncle " + u.value + "). Recoloring...");
                 highlightRBNodes(n, p, u, g);
+                showRotationOverlay(g, "Uncle is Red: Recolor parent, uncle, and grandparent");
 
                 double delayMs = getExecDelay();
                 PauseTransition pause = new PauseTransition(Duration.millis(delayMs));
                 pause.setOnFinished(e -> {
+                    if (sessionId != treeSessionId) return;
                     p.isRed = false;
                     u.isRed = false;
                     g.isRed = true;
                     resetColors();
-                    checkAndBalanceRBStep(g, onFinished);
+                    removeRotationOverlay();
+                    checkAndBalanceRBStep(g, onFinished, sessionId);
                 });
+                registerAnimation(pause);
                 pause.play();
                 return;
             }
@@ -2287,21 +2785,26 @@ public class ExplorerView {
             // Case 2: Uncle is BLACK or null -> Rotate & Recolor
             status("⚠️ Double Red Violation (Black/Null Uncle). Rotating and recoloring...");
             highlightRBNodes(n, p, u, g);
+            showRotationOverlay(g, "Uncle is Black/Null: Rotate & Recolor");
 
             double delayMs = getExecDelay();
             PauseTransition pause = new PauseTransition(Duration.millis(delayMs));
             pause.setOnFinished(e -> {
+                if (sessionId != treeSessionId) return;
                 if (g.left == p) {
                     if (p.right == n) {
                         // LR Case
                         status("⚠️ Left-Right Case: Rotating left at " + p.value);
+                        showRotationOverlay(p, "LR Case: Rotate Left at " + p.value);
                         rotateLeft(p);
                         rebindEdgesRec(root);
                         relayout();
 
                         PauseTransition pause2 = new PauseTransition(Duration.millis(delayMs));
                         pause2.setOnFinished(e2 -> {
+                            if (sessionId != treeSessionId) return;
                             status("⚠️ Left-Right Case: Final right rotation at " + g.value + " & recoloring.");
+                            showRotationOverlay(g, "LR Case: Rotate Right at " + g.value + " & Recolor");
                             TreeNode rotNode = rotateRight(g);
                             rotNode.isRed = false;
                             if (rotNode.left != null) rotNode.left.isRed = true;
@@ -2309,12 +2812,15 @@ public class ExplorerView {
                             resetColors();
                             rebindEdgesRec(root);
                             relayout();
-                            checkAndBalanceRBStep(rotNode.parent, onFinished);
+                            removeRotationOverlay();
+                            checkAndBalanceRBStep(rotNode.parent, onFinished, sessionId);
                         });
+                        registerAnimation(pause2);
                         pause2.play();
                     } else {
                         // LL Case
                         status("⚠️ Left-Left Case: Rotating right at " + g.value + " & recoloring.");
+                        showRotationOverlay(g, "LL Case: Rotate Right at " + g.value + " & Recolor");
                         TreeNode rotNode = rotateRight(g);
                         rotNode.isRed = false;
                         if (rotNode.left != null) rotNode.left.isRed = true;
@@ -2322,19 +2828,23 @@ public class ExplorerView {
                         resetColors();
                         rebindEdgesRec(root);
                         relayout();
-                        checkAndBalanceRBStep(rotNode.parent, onFinished);
+                        removeRotationOverlay();
+                        checkAndBalanceRBStep(rotNode.parent, onFinished, sessionId);
                     }
                 } else {
                     if (p.left == n) {
                         // RL Case
                         status("⚠️ Right-Left Case: Rotating right at " + p.value);
+                        showRotationOverlay(p, "RL Case: Rotate Right at " + p.value);
                         rotateRight(p);
                         rebindEdgesRec(root);
                         relayout();
 
                         PauseTransition pause2 = new PauseTransition(Duration.millis(delayMs));
                         pause2.setOnFinished(e2 -> {
+                            if (sessionId != treeSessionId) return;
                             status("⚠️ Right-Left Case: Final left rotation at " + g.value + " & recoloring.");
+                            showRotationOverlay(g, "RL Case: Rotate Left at " + g.value + " & Recolor");
                             TreeNode rotNode = rotateLeft(g);
                             rotNode.isRed = false;
                             if (rotNode.left != null) rotNode.left.isRed = true;
@@ -2342,12 +2852,15 @@ public class ExplorerView {
                             resetColors();
                             rebindEdgesRec(root);
                             relayout();
-                            checkAndBalanceRBStep(rotNode.parent, onFinished);
+                            removeRotationOverlay();
+                            checkAndBalanceRBStep(rotNode.parent, onFinished, sessionId);
                         });
+                        registerAnimation(pause2);
                         pause2.play();
                     } else {
                         // RR Case
                         status("⚠️ Right-Right Case: Rotating left at " + g.value + " & recoloring.");
+                        showRotationOverlay(g, "RR Case: Rotate Left at " + g.value + " & Recolor");
                         TreeNode rotNode = rotateLeft(g);
                         rotNode.isRed = false;
                         if (rotNode.left != null) rotNode.left.isRed = true;
@@ -2355,19 +2868,26 @@ public class ExplorerView {
                         resetColors();
                         rebindEdgesRec(root);
                         relayout();
-                        checkAndBalanceRBStep(rotNode.parent, onFinished);
+                        removeRotationOverlay();
+                        checkAndBalanceRBStep(rotNode.parent, onFinished, sessionId);
                     }
                 }
             });
+            registerAnimation(pause);
             pause.play();
             return;
         }
 
         // No violation, move up to parent
-        checkAndBalanceRBStep(n.parent, onFinished);
+        checkAndBalanceRBStep(n.parent, onFinished, sessionId);
     }
 
     private void stepwiseBalanceBST(Runnable onFinished) {
+        stepwiseBalanceBST(onFinished, treeSessionId);
+    }
+
+    private void stepwiseBalanceBST(Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
         recomputeHeights(root);
         TreeNode unbalanced = findFirstUnbalanced(root);
         if (unbalanced == null) {
@@ -2379,8 +2899,10 @@ public class ExplorerView {
         }
 
         checkAndRotateStep(unbalanced, () -> {
-            stepwiseBalanceBST(onFinished);
-        });
+            if (sessionId == treeSessionId) {
+                stepwiseBalanceBST(onFinished, sessionId);
+            }
+        }, sessionId);
     }
 
     private TreeNode findFirstUnbalanced(TreeNode n) {
@@ -2513,6 +3035,11 @@ public class ExplorerView {
     }
 
     private void convertToRedBlackStepwise(Runnable onFinished) {
+        convertToRedBlackStepwise(onFinished, treeSessionId);
+    }
+
+    private void convertToRedBlackStepwise(Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
         java.util.List<Integer> values = new ArrayList<>();
         collectValuesInOrder(root, values);
 
@@ -2525,19 +3052,25 @@ public class ExplorerView {
             return;
         }
 
-        insertSequentialRB(values, 0, onFinished);
+        insertSequentialRB(values, 0, onFinished, sessionId);
     }
 
-    private void insertSequentialRB(java.util.List<Integer> values, int idx, Runnable onFinished) {
+    private void insertSequentialRB(java.util.List<Integer> values, int idx, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
         if (idx >= values.size()) {
             if (onFinished != null) onFinished.run();
             return;
         }
         insert(values.get(idx), () -> {
+            if (sessionId != treeSessionId) return;
             PauseTransition nextPause = new PauseTransition(Duration.millis(getExecDelay()));
-            nextPause.setOnFinished(e -> insertSequentialRB(values, idx + 1, onFinished));
+            nextPause.setOnFinished(e -> {
+                if (sessionId == treeSessionId) {
+                    insertSequentialRB(values, idx + 1, onFinished, sessionId);
+                }
+            });
             nextPause.play();
-        });
+        }, sessionId);
     }
 
     private void collectValuesInOrder(TreeNode n, java.util.List<Integer> list) {
@@ -2547,6 +3080,695 @@ public class ExplorerView {
         collectValuesInOrder(n.right, list);
     }
 
-    // ── Main ───────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════
+    //  2-3 Tree (B-Tree) Visualization & Engine
+    // ═══════════════════════════════════════════════════════════
 
+    private void bTreeRelayout() {
+        if (bTreeRoot == null) return;
+
+        java.util.Map<BTreeNode, Double> relXMap = new java.util.HashMap<>();
+        computeBTreeRelativePositions(bTreeRoot, relXMap);
+        assignBTreeAbsoluteCoordinates(bTreeRoot, 2000, ROOT_Y, 0, relXMap);
+
+        double[] minMax = {Double.MAX_VALUE, -Double.MAX_VALUE};
+        findBTreeMinMaxX(bTreeRoot, minMax);
+        if (minMax[0] != Double.MAX_VALUE && minMax[1] != -Double.MAX_VALUE) {
+            double offset = 2000 - (minMax[0] + minMax[1]) / 2.0;
+            applyBTreeOffset(bTreeRoot, offset);
+        }
+
+        animateBTreeToTargets(bTreeRoot);
+        updateBTreeEdges(bTreeRoot);
+    }
+
+    private void computeBTreeRelativePositions(BTreeNode node, java.util.Map<BTreeNode, Double> relXMap) {
+        if (node == null) return;
+        for (BTreeNode child : node.children) {
+            computeBTreeRelativePositions(child, relXMap);
+        }
+
+        if (node.isLeaf()) {
+            relXMap.put(node, 0.0);
+            return;
+        }
+
+        int k = node.children.size();
+        if (k == 2) {
+            BTreeNode left = node.children.get(0);
+            BTreeNode right = node.children.get(1);
+            double leftWidth = getBTreeSubtreeWidth(left);
+            double rightWidth = getBTreeSubtreeWidth(right);
+
+            double gap = 30;
+            relXMap.put(left, -(leftWidth / 2 + gap / 2));
+            relXMap.put(right, (rightWidth / 2 + gap / 2));
+        } else if (k == 3) {
+            BTreeNode left = node.children.get(0);
+            BTreeNode center = node.children.get(1);
+            BTreeNode right = node.children.get(2);
+
+            double leftWidth = getBTreeSubtreeWidth(left);
+            double centerWidth = getBTreeSubtreeWidth(center);
+            double rightWidth = getBTreeSubtreeWidth(right);
+
+            double gap = 30;
+            relXMap.put(center, 0.0);
+            relXMap.put(left, -(centerWidth / 2 + leftWidth / 2 + gap));
+            relXMap.put(right, (centerWidth / 2 + rightWidth / 2 + gap));
+        } else if (k == 4) {
+            BTreeNode c0 = node.children.get(0);
+            BTreeNode c1 = node.children.get(1);
+            BTreeNode c2 = node.children.get(2);
+            BTreeNode c3 = node.children.get(3);
+
+            double w0 = getBTreeSubtreeWidth(c0);
+            double w1 = getBTreeSubtreeWidth(c1);
+            double w2 = getBTreeSubtreeWidth(c2);
+            double w3 = getBTreeSubtreeWidth(c3);
+
+            double gap = 20;
+            relXMap.put(c0, -(w0 / 2 + w1 + gap * 1.5));
+            relXMap.put(c1, -(w1 / 2 + gap / 2));
+            relXMap.put(c2, (w2 / 2 + gap / 2));
+            relXMap.put(c3, (w2 + w3 / 2 + gap * 1.5));
+        }
+    }
+
+    private double getBTreeSubtreeWidth(BTreeNode node) {
+        if (node == null) return 0;
+        if (node.isLeaf()) {
+            return node.keys.size() * 50 + 20;
+        }
+        double total = 0;
+        for (BTreeNode child : node.children) {
+            total += getBTreeSubtreeWidth(child);
+        }
+        double gap = 30;
+        total += (node.children.size() - 1) * gap;
+        return total;
+    }
+
+    private void assignBTreeAbsoluteCoordinates(BTreeNode node, double absX, double startY, double depth, java.util.Map<BTreeNode, Double> relXMap) {
+        if (node == null) return;
+
+        node.targetX = absX;
+        node.targetY = startY + depth * VERTICAL_GAP;
+
+        if (node.isLeaf()) return;
+
+        int k = node.children.size();
+        for (int i = 0; i < k; i++) {
+            BTreeNode child = node.children.get(i);
+            double offset = relXMap.getOrDefault(child, 0.0);
+            assignBTreeAbsoluteCoordinates(child, absX + offset, startY, depth + 1, relXMap);
+        }
+    }
+
+    private void findBTreeMinMaxX(BTreeNode node, double[] minMax) {
+        if (node == null) return;
+        double width = node.keys.size() * 50;
+        double leftX = node.targetX - width / 2;
+        double rightX = node.targetX + width / 2;
+        if (leftX < minMax[0]) minMax[0] = leftX;
+        if (rightX > minMax[1]) minMax[1] = rightX;
+
+        for (BTreeNode child : node.children) {
+            findBTreeMinMaxX(child, minMax);
+        }
+    }
+
+    private void applyBTreeOffset(BTreeNode node, double dx) {
+        if (node == null) return;
+        node.targetX += dx;
+        for (BTreeNode child : node.children) {
+            applyBTreeOffset(child, dx);
+        }
+    }
+
+    private void animateBTreeToTargets(BTreeNode node) {
+        if (node == null) return;
+
+        double startX = node.currentX.get();
+        double startY = node.currentY.get();
+        double targetX = node.targetX;
+        double targetY = node.targetY;
+
+        if (Math.abs(startX - targetX) < 0.1 && Math.abs(startY - targetY) < 0.1) {
+            for (BTreeNode child : node.children) {
+                animateBTreeToTargets(child);
+            }
+            return;
+        }
+
+        double distance = Math.abs(targetX - startX);
+        double maxHop = Math.min(45.0, distance * 0.25);
+
+        javafx.animation.Transition transition = new javafx.animation.Transition() {
+            {
+                setCycleDuration(Duration.millis(getAnimMs()));
+                setInterpolator(Interpolator.EASE_BOTH);
+            }
+            @Override
+            protected void interpolate(double frac) {
+                double x = startX + (targetX - startX) * frac;
+                double hop = -maxHop * Math.sin(Math.PI * frac);
+                double y = startY + (targetY - startY) * frac + hop;
+                node.currentX.set(x);
+                node.currentY.set(y);
+            }
+        };
+        registerAnimation(transition);
+        transition.play();
+
+        for (BTreeNode child : node.children) {
+            animateBTreeToTargets(child);
+        }
+    }
+
+    private void updateBTreeEdges(BTreeNode node) {
+        if (node == null) return;
+
+        for (int i = 0; i < node.children.size(); i++) {
+            BTreeNode child = node.children.get(i);
+            if (child.edgeToParent != null) {
+                canvas.getChildren().remove(child.edgeToParent);
+            }
+
+            // Neon back line (border/glow)
+            Line backEdge = new Line();
+            backEdge.setStroke(Color.web(accentColorHex));
+            backEdge.setStrokeWidth(5.0);
+            backEdge.setStrokeLineCap(javafx.scene.shape.StrokeLineCap.ROUND);
+            
+            // Add a neon glow filter to the back edge
+            javafx.scene.effect.DropShadow glow = new javafx.scene.effect.DropShadow(4, Color.web(accentColorHex));
+            backEdge.setEffect(glow);
+
+            // Dark front line (core)
+            Line frontEdge = new Line();
+            frontEdge.setStroke(Color.web("#0a0f2e"));
+            frontEdge.setStrokeWidth(2.0);
+            frontEdge.setStrokeLineCap(javafx.scene.shape.StrokeLineCap.ROUND);
+
+            // Bind start and end properties for both lines
+            int idx = i;
+            javafx.beans.value.ObservableDoubleValue startX = node.currentX.subtract(node.bgRect.widthProperty().divide(2)).add(idx * 50);
+            javafx.beans.value.ObservableDoubleValue startY = node.currentY.add(20);
+            javafx.beans.value.ObservableDoubleValue endX = child.currentX;
+            javafx.beans.value.ObservableDoubleValue endY = child.currentY.subtract(20);
+
+            backEdge.startXProperty().bind(startX);
+            backEdge.startYProperty().bind(startY);
+            backEdge.endXProperty().bind(endX);
+            backEdge.endYProperty().bind(endY);
+
+            frontEdge.startXProperty().bind(startX);
+            frontEdge.startYProperty().bind(startY);
+            frontEdge.endXProperty().bind(endX);
+            frontEdge.endYProperty().bind(endY);
+
+            // Wrap in a Group
+            javafx.scene.Group edgeGroup = new javafx.scene.Group(backEdge, frontEdge);
+            child.edgeToParent = edgeGroup;
+
+            canvas.getChildren().add(0, edgeGroup);
+
+            updateBTreeEdges(child);
+        }
+    }
+
+    private void bTreeInsert(int value, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
+        if (bTreeRoot == null) {
+            bTreeRoot = new BTreeNode(value);
+            bTreeRoot.placeAt(2000, ROOT_Y);
+            bTreeRoot.redrawNode(accentColorHex);
+            canvas.getChildren().add(bTreeRoot.group);
+            status("Inserted root: " + value);
+            bTreeRelayout();
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        BTreeNode leaf = findLeafForInsert(bTreeRoot, value);
+        if (leaf.keys.contains(value)) {
+            status("Duplicate value " + value + " — not inserted");
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        List<BTreeNode> path = getBTreePath(bTreeRoot, value);
+        double stepMs = 2400.0 / animationSpeed;
+
+        animateBTreePath(path, stepMs, Color.web("#f39c12"), () -> {
+            if (sessionId != treeSessionId) return;
+            insertKeySorted(leaf, value);
+            leaf.redrawNode(accentColorHex);
+            bTreeRelayout();
+
+            checkAndSplitBTree(leaf, value, onFinished, sessionId);
+        });
+    }
+
+    private void bTreeSearch(int value, java.util.function.Consumer<Boolean> onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
+        if (bTreeRoot == null) {
+            status("Tree is empty");
+            if (onFinished != null) onFinished.accept(false);
+            return;
+        }
+
+        List<BTreeNode> path = getBTreePath(bTreeRoot, value);
+        BTreeNode last = path.get(path.size() - 1);
+        boolean found = last.keys.contains(value);
+
+        double stepMs = 2400.0 / animationSpeed;
+        Color highlightColor = found ? Color.web("#10b981") : Color.web("#ef4444");
+
+        animateBTreePath(path, stepMs, highlightColor, () -> {
+            if (sessionId != treeSessionId) return;
+            status(found ? "Found " + value : "Value " + value + " not in tree");
+            highlightBTreeNode(last, highlightColor, 1000);
+            if (onFinished != null) onFinished.accept(found);
+        });
+    }
+
+    private List<BTreeNode> getBTreePath(BTreeNode node, int value) {
+        List<BTreeNode> path = new ArrayList<>();
+        BTreeNode cur = node;
+        while (cur != null) {
+            path.add(cur);
+            if (cur.isLeaf()) break;
+            int idx = 0;
+            while (idx < cur.keys.size() && value > cur.keys.get(idx)) {
+                idx++;
+            }
+            cur = cur.children.get(idx);
+        }
+        return path;
+    }
+
+    private BTreeNode findLeafForInsert(BTreeNode node, int value) {
+        if (node.isLeaf()) return node;
+        int idx = 0;
+        while (idx < node.keys.size() && value > node.keys.get(idx)) {
+            idx++;
+        }
+        return findLeafForInsert(node.children.get(idx), value);
+    }
+
+    private void insertKeySorted(BTreeNode node, int value) {
+        int idx = 0;
+        while (idx < node.keys.size() && value > node.keys.get(idx)) {
+            idx++;
+        }
+        node.keys.add(idx, value);
+    }
+
+    private void checkAndSplitBTree(BTreeNode node, int insertedValue, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
+        if (node.keys.size() <= 2) {
+            bTreeRelayout();
+            BTreeNode targetNode = findBTreeNode(bTreeRoot, insertedValue);
+            if (targetNode != null) {
+                highlightBTreeNode(targetNode, Color.web("#10b981"), 800);
+            }
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        node.bgRect.setStroke(Color.web("#ef4444"));
+        node.bgRect.setStrokeWidth(3.5);
+        status("Node overflow (" + node.keys + "). Splitting and pushing up middle key: " + node.keys.get(1));
+
+        PauseTransition pause = new PauseTransition(Duration.millis(getExecDelay()));
+        pause.setOnFinished(e -> {
+            if (sessionId != treeSessionId) return;
+
+            int midVal = node.keys.get(1);
+            int leftVal = node.keys.get(0);
+            int rightVal = node.keys.get(2);
+
+            BTreeNode parent = node.parent;
+            BTreeNode sibling = new BTreeNode(rightVal);
+            sibling.parent = parent;
+
+            if (!node.isLeaf()) {
+                sibling.children.add(node.children.get(2));
+                sibling.children.add(node.children.get(3));
+                node.children.get(2).parent = sibling;
+                node.children.get(3).parent = sibling;
+
+                node.children.remove(3);
+                node.children.remove(2);
+            }
+
+            node.keys.clear();
+            node.keys.add(leftVal);
+            node.redrawNode(accentColorHex);
+
+            sibling.redrawNode(accentColorHex);
+            canvas.getChildren().add(sibling.group);
+
+            sibling.currentX.set(node.currentX.get() + 50);
+            sibling.currentY.set(node.currentY.get());
+
+            if (parent == null) {
+                BTreeNode newRoot = new BTreeNode(midVal);
+                newRoot.children.add(node);
+                newRoot.children.add(sibling);
+                node.parent = newRoot;
+                sibling.parent = newRoot;
+
+                newRoot.placeAt(2000, ROOT_Y);
+                newRoot.redrawNode(accentColorHex);
+                canvas.getChildren().add(newRoot.group);
+                bTreeRoot = newRoot;
+
+                status("Created new root: " + midVal);
+                bTreeRelayout();
+                BTreeNode targetNode = findBTreeNode(bTreeRoot, insertedValue);
+                if (targetNode != null) {
+                    highlightBTreeNode(targetNode, Color.web("#10b981"), 800);
+                }
+                if (onFinished != null) onFinished.run();
+            } else {
+                int idx = parent.children.indexOf(node);
+                parent.keys.add(idx, midVal);
+                parent.children.add(idx + 1, sibling);
+                parent.redrawNode(accentColorHex);
+
+                bTreeRelayout();
+                checkAndSplitBTree(parent, insertedValue, onFinished, sessionId);
+            }
+        });
+        registerAnimation(pause);
+        pause.play();
+    }
+
+    private void animateBTreePath(List<BTreeNode> path, double stepMs, Color highlightColor, Runnable onFinished) {
+        if (path.isEmpty()) {
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+        stopAllTimelines();
+        resetBTreeColors(bTreeRoot);
+
+        Timeline tl = new Timeline();
+        activeTimelines.add(tl);
+        tl.setOnFinished(e -> activeTimelines.remove(tl));
+
+        for (int i = 0; i < path.size(); i++) {
+            BTreeNode n = path.get(i);
+            int idx = i;
+            tl.getKeyFrames().add(new KeyFrame(
+                Duration.millis(stepMs * i),
+                e -> {
+                    n.bgRect.setStroke(highlightColor);
+                    n.bgRect.setStrokeWidth(3.5);
+                    if (idx > 0) {
+                        BTreeNode prev = path.get(idx - 1);
+                        prev.bgRect.setStroke(Color.web(accentColorHex));
+                        prev.bgRect.setStrokeWidth(2);
+                    }
+                }
+            ));
+        }
+
+        tl.getKeyFrames().add(new KeyFrame(
+            Duration.millis(stepMs * path.size()),
+            e -> {
+                if (onFinished != null) onFinished.run();
+            }
+        ));
+        tl.play();
+    }
+
+    private void highlightBTreeNode(BTreeNode node, Color color, double durationMs) {
+        node.bgRect.setStroke(color);
+        node.bgRect.setStrokeWidth(4);
+
+        PauseTransition p = new PauseTransition(Duration.millis(durationMs));
+        p.setOnFinished(e -> {
+            node.bgRect.setStroke(Color.web(accentColorHex));
+            node.bgRect.setStrokeWidth(2);
+        });
+        registerAnimation(p);
+        p.play();
+    }
+
+    private void resetBTreeColors(BTreeNode node) {
+        if (node == null) return;
+        node.bgRect.setStroke(Color.web(accentColorHex));
+        node.bgRect.setStrokeWidth(2);
+        for (BTreeNode child : node.children) {
+            resetBTreeColors(child);
+        }
+    }
+
+    private void insertBTreeSequence(List<Integer> vals, int index, int sessionId) {
+        if (sessionId != treeSessionId) return;
+        if (index >= vals.size()) {
+            status("B-Tree batch insertion complete");
+            return;
+        }
+        int val = vals.get(index);
+        bTreeInsert(val, () -> {
+            if (sessionId == treeSessionId) {
+                PauseTransition pause = new PauseTransition(Duration.millis(getAnimMs() + 100));
+                pause.setOnFinished(e -> {
+                    if (sessionId == treeSessionId) {
+                        insertBTreeSequence(vals, index + 1, sessionId);
+                    }
+                });
+                registerAnimation(pause);
+                pause.play();
+            }
+        }, sessionId);
+    }
+
+    private void bTreeDelete(int value, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
+        if (bTreeRoot == null) {
+            status("Tree is empty");
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        BTreeNode targetNode = findBTreeNode(bTreeRoot, value);
+        if (targetNode == null) {
+            status("Value " + value + " not in tree");
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        List<BTreeNode> path;
+        if (targetNode.isLeaf()) {
+            path = getBTreePathToKey(bTreeRoot, value);
+        } else {
+            int k = targetNode.keys.indexOf(value);
+            path = getBTreePathToKey(bTreeRoot, value);
+            BTreeNode cur = targetNode.children.get(k);
+            while (cur != null) {
+                path.add(cur);
+                if (cur.isLeaf()) break;
+                cur = cur.children.get(cur.children.size() - 1);
+            }
+        }
+
+        double stepMs = 2400.0 / animationSpeed;
+        animateBTreePath(path, stepMs, Color.web("#ef4444"), () -> {
+            if (sessionId != treeSessionId) return;
+
+            BTreeNode leafNode;
+            if (targetNode.isLeaf()) {
+                leafNode = targetNode;
+                leafNode.keys.remove(Integer.valueOf(value));
+            } else {
+                int k = targetNode.keys.indexOf(value);
+                BTreeNode predLeaf = path.get(path.size() - 1);
+                int predKey = predLeaf.keys.get(predLeaf.keys.size() - 1);
+
+                // Swap keys
+                targetNode.keys.set(k, predKey);
+                predLeaf.keys.remove(predLeaf.keys.size() - 1);
+
+                targetNode.redrawNode(accentColorHex);
+                leafNode = predLeaf;
+            }
+
+            leafNode.redrawNode(accentColorHex);
+            bTreeRelayout();
+
+            if (leafNode.keys.isEmpty()) {
+                resolveBTreeUnderflow(leafNode, onFinished, sessionId);
+            } else {
+                status("Deleted: " + value);
+                highlightBTreeNode(leafNode, Color.web("#10b981"), 800);
+                if (onFinished != null) onFinished.run();
+            }
+        });
+    }
+
+    private List<BTreeNode> getBTreePathToKey(BTreeNode node, int value) {
+        List<BTreeNode> path = new ArrayList<>();
+        BTreeNode cur = node;
+        while (cur != null) {
+            path.add(cur);
+            if (cur.keys.contains(value)) break;
+            if (cur.isLeaf()) break;
+            int idx = 0;
+            while (idx < cur.keys.size() && value > cur.keys.get(idx)) {
+                idx++;
+            }
+            cur = cur.children.get(idx);
+        }
+        return path;
+    }
+
+    private void resolveBTreeUnderflow(BTreeNode node, Runnable onFinished, int sessionId) {
+        if (sessionId != treeSessionId) return;
+
+        if (node == bTreeRoot) {
+            if (node.keys.isEmpty()) {
+                if (!node.children.isEmpty()) {
+                    bTreeRoot = node.children.get(0);
+                    bTreeRoot.parent = null;
+                    canvas.getChildren().remove(node.group);
+                    if (node.edgeToParent != null) {
+                        canvas.getChildren().remove(node.edgeToParent);
+                    }
+                    status("Root underflow: child becomes new root");
+                } else {
+                    bTreeRoot = null;
+                    canvas.getChildren().remove(node.group);
+                    status("Tree is empty");
+                }
+                bTreeRelayout();
+            }
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        BTreeNode parent = node.parent;
+        int idx = parent.children.indexOf(node);
+        BTreeNode leftSib = (idx > 0) ? parent.children.get(idx - 1) : null;
+        BTreeNode rightSib = (idx < parent.children.size() - 1) ? parent.children.get(idx + 1) : null;
+
+        // 1. Borrow from Left Sibling
+        if (leftSib != null && leftSib.keys.size() > 1) {
+            status("Underflow: borrowing from left sibling");
+            int parentKey = parent.keys.get(idx - 1);
+            int borrowKey = leftSib.keys.remove(leftSib.keys.size() - 1);
+
+            parent.keys.set(idx - 1, borrowKey);
+            node.keys.add(0, parentKey);
+
+            if (!leftSib.isLeaf()) {
+                BTreeNode movedChild = leftSib.children.remove(leftSib.children.size() - 1);
+                node.children.add(0, movedChild);
+                movedChild.parent = node;
+            }
+
+            leftSib.redrawNode(accentColorHex);
+            node.redrawNode(accentColorHex);
+            parent.redrawNode(accentColorHex);
+            bTreeRelayout();
+            updateBTreeEdges(bTreeRoot);
+
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        // 2. Borrow from Right Sibling
+        if (rightSib != null && rightSib.keys.size() > 1) {
+            status("Underflow: borrowing from right sibling");
+            int parentKey = parent.keys.get(idx);
+            int borrowKey = rightSib.keys.remove(0);
+
+            parent.keys.set(idx, borrowKey);
+            node.keys.add(parentKey);
+
+            if (!rightSib.isLeaf()) {
+                BTreeNode movedChild = rightSib.children.remove(0);
+                node.children.add(movedChild);
+                movedChild.parent = node;
+            }
+
+            rightSib.redrawNode(accentColorHex);
+            node.redrawNode(accentColorHex);
+            parent.redrawNode(accentColorHex);
+            bTreeRelayout();
+            updateBTreeEdges(bTreeRoot);
+
+            if (onFinished != null) onFinished.run();
+            return;
+        }
+
+        // 3. Merge with Left Sibling
+        if (leftSib != null) {
+            status("Underflow: merging with left sibling");
+            int parentKey = parent.keys.remove(idx - 1);
+            parent.children.remove(node);
+
+            leftSib.keys.add(parentKey);
+            // Transfer children
+            for (BTreeNode child : node.children) {
+                leftSib.children.add(child);
+                child.parent = leftSib;
+            }
+
+            canvas.getChildren().remove(node.group);
+            if (node.edgeToParent != null) {
+                canvas.getChildren().remove(node.edgeToParent);
+            }
+
+            leftSib.redrawNode(accentColorHex);
+            parent.redrawNode(accentColorHex);
+            bTreeRelayout();
+            updateBTreeEdges(bTreeRoot);
+
+            PauseTransition pause = new PauseTransition(Duration.millis(getExecDelay()));
+            pause.setOnFinished(e -> {
+                resolveBTreeUnderflow(parent, onFinished, sessionId);
+            });
+            registerAnimation(pause);
+            pause.play();
+            return;
+        }
+
+        // 4. Merge with Right Sibling (leftSib == null)
+        if (rightSib != null) {
+            status("Underflow: merging with right sibling");
+            int parentKey = parent.keys.remove(idx);
+            parent.children.remove(rightSib);
+
+            node.keys.add(parentKey);
+            node.keys.addAll(rightSib.keys);
+            // Transfer children
+            for (BTreeNode child : rightSib.children) {
+                node.children.add(child);
+                child.parent = node;
+            }
+
+            canvas.getChildren().remove(rightSib.group);
+            if (rightSib.edgeToParent != null) {
+                canvas.getChildren().remove(rightSib.edgeToParent);
+            }
+
+            node.redrawNode(accentColorHex);
+            parent.redrawNode(accentColorHex);
+            bTreeRelayout();
+            updateBTreeEdges(bTreeRoot);
+
+            PauseTransition pause = new PauseTransition(Duration.millis(getExecDelay()));
+            pause.setOnFinished(e -> {
+                resolveBTreeUnderflow(parent, onFinished, sessionId);
+            });
+            registerAnimation(pause);
+            pause.play();
+            return;
+        }
+    }
 }

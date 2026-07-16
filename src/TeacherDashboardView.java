@@ -155,22 +155,7 @@ public class TeacherDashboardView {
         detailsPlaceholder.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
         detailsPlaceholder.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
 
-        VBox analyticsContainer = new VBox(24);
-        analyticsContainer.setPadding(new Insets(10, 10, 10, 10));
-        analyticsContainer.setStyle("-fx-background-color: transparent;");
-
-        Label dashboardTitle = new Label("📈 Class Visual Analytics");
-        dashboardTitle.setFont(Font.font("Segoe UI", FontWeight.BOLD, 22));
-        dashboardTitle.setTextFill(Color.WHITE);
-
-        Label dashboardSubtitle = new Label("Class-wide metrics and concept completion rates. Click a student card to select, click again to return here.");
-        dashboardSubtitle.setFont(Font.font("Arial", 12));
-        dashboardSubtitle.setTextFill(Color.web(Theme.TEXT_MUTED));
-
-        VBox titleBox = new VBox(4, dashboardTitle, dashboardSubtitle);
-
-        VBox chartsBox = buildClassAnalyticsCharts();
-        analyticsContainer.getChildren().addAll(titleBox, chartsBox);
+        VBox analyticsContainer = buildClassAnalyticsPanel();
         detailsPlaceholder.setContent(analyticsContainer);
 
         // State 2: Actual details layout
@@ -632,6 +617,70 @@ public class TeacherDashboardView {
         alert.showAndWait();
     }
 
+    private VBox buildEmptyStatePlaceholder() {
+        VBox placeholder = new VBox(16);
+        placeholder.setAlignment(Pos.CENTER);
+        placeholder.setPadding(new Insets(60, 40, 60, 40));
+        placeholder.setStyle(
+            "-fx-background-color: #0f184744;" +
+            "-fx-background-radius: 12;" +
+            "-fx-border-color: #1e2c5688;" +
+            "-fx-border-width: 1.5;" +
+            "-fx-border-radius: 12;"
+        );
+
+        Label icon = new Label("🎓");
+        icon.setFont(Font.font("Segoe UI", 48));
+        
+        Label title = new Label("No Students Enrolled");
+        title.setFont(Font.font("Segoe UI", FontWeight.BOLD, 18));
+        title.setTextFill(Color.WHITE);
+
+        Label desc = new Label("Enroll students to start tracking their progress, XP, and focus metrics.");
+        desc.setFont(Font.font("Arial", 13));
+        desc.setTextFill(Color.web(Theme.TEXT_MUTED));
+        desc.setTextAlignment(TextAlignment.CENTER);
+        desc.setWrapText(true);
+        desc.setMaxWidth(320);
+
+        Label hint = new Label("Click \"Invite Student\" in the navigation bar to create student accounts.");
+        hint.setFont(Font.font("Arial", FontWeight.BOLD, 11));
+        hint.setTextFill(Color.web(Theme.ACCENT));
+        hint.setTextAlignment(TextAlignment.CENTER);
+        hint.setWrapText(true);
+        hint.setMaxWidth(320);
+
+        placeholder.getChildren().addAll(icon, title, desc, hint);
+        return placeholder;
+    }
+
+    private VBox buildClassAnalyticsPanel() {
+        VBox contentBox = new VBox(24);
+        contentBox.setPadding(new Insets(10, 10, 10, 10));
+        contentBox.setStyle("-fx-background-color: transparent;");
+
+        Label dashboardTitle = new Label("📈 Class Visual Analytics");
+        dashboardTitle.setFont(Font.font("Segoe UI", FontWeight.BOLD, 22));
+        dashboardTitle.setTextFill(Color.WHITE);
+
+        Label dashboardSubtitle = new Label("Class-wide metrics and concept completion rates. Click a student card to select, click again to return here.");
+        dashboardSubtitle.setFont(Font.font("Arial", 12));
+        dashboardSubtitle.setTextFill(Color.web(Theme.TEXT_MUTED));
+
+        VBox titleBox = new VBox(4, dashboardTitle, dashboardSubtitle);
+        contentBox.getChildren().add(titleBox);
+
+        if (allStudents.isEmpty()) {
+            VBox emptyState = buildEmptyStatePlaceholder();
+            contentBox.getChildren().add(emptyState);
+        } else {
+            VBox chartsBox = buildClassAnalyticsCharts();
+            contentBox.getChildren().add(chartsBox);
+        }
+
+        return contentBox;
+    }
+
     private void refreshStudentList() {
         allStudents = App.db.getAllStudentsInfo();
         filterStudents(""); // Re-render the student list cards
@@ -646,22 +695,7 @@ public class TeacherDashboardView {
 
         // Refresh visual analytics charts if active
         if (detailsPlaceholder.isVisible()) {
-            VBox newCharts = buildClassAnalyticsCharts();
-            VBox analyticsContainer = new VBox(24);
-            analyticsContainer.setPadding(new Insets(10, 10, 10, 10));
-            analyticsContainer.setStyle("-fx-background-color: transparent;");
-
-            Label dashboardTitle = new Label("📈 Class Visual Analytics");
-            dashboardTitle.setFont(Font.font("Segoe UI", FontWeight.BOLD, 22));
-            dashboardTitle.setTextFill(Color.WHITE);
-
-            Label dashboardSubtitle = new Label("Class-wide metrics and concept completion rates. Click a student card to select, click again to return here.");
-            dashboardSubtitle.setFont(Font.font("Arial", 12));
-            dashboardSubtitle.setTextFill(Color.web(Theme.TEXT_MUTED));
-
-            VBox titleBox = new VBox(4, dashboardTitle, dashboardSubtitle);
-            analyticsContainer.getChildren().addAll(titleBox, newCharts);
-
+            VBox analyticsContainer = buildClassAnalyticsPanel();
             detailsPlaceholder.setContent(analyticsContainer);
         }
     }
@@ -685,8 +719,8 @@ public class TeacherDashboardView {
         BarChart<String, Number> xpChart = new BarChart<>(xAxis, yAxis);
         xpChart.setTitle("XP Leaderboard");
         xpChart.setLegendVisible(false);
-        xpChart.setPrefSize(340, 240);
-        xpChart.setMinSize(340, 240);
+        xpChart.setPrefSize(320, 240);
+        xpChart.setMinSize(320, 240);
         xpChart.setStyle("-fx-background-color: transparent;");
 
         XYChart.Series<String, Number> xpSeries = new XYChart.Series<>();
@@ -703,8 +737,8 @@ public class TeacherDashboardView {
         // Difficulty Breakdown Pie Chart
         PieChart pieChart = new PieChart();
         pieChart.setTitle("Difficulty Distribution");
-        pieChart.setPrefSize(280, 240);
-        pieChart.setMinSize(280, 240);
+        pieChart.setPrefSize(300, 240);
+        pieChart.setMinSize(300, 240);
         pieChart.setLegendVisible(true);
         pieChart.setStyle("-fx-background-color: transparent;");
 
@@ -735,6 +769,9 @@ public class TeacherDashboardView {
 
         row1.getChildren().addAll(xpChart, pieChart);
 
+        HBox row2 = new HBox(16);
+        row2.setAlignment(Pos.CENTER);
+
         // Concept Solving Frequency Rate
         CategoryAxis xAxisProb = new CategoryAxis();
         xAxisProb.setLabel("Problem ID");
@@ -749,7 +786,8 @@ public class TeacherDashboardView {
         BarChart<String, Number> probChart = new BarChart<>(xAxisProb, yAxisProb);
         probChart.setTitle("Concept Solving Frequency");
         probChart.setLegendVisible(false);
-        probChart.setPrefHeight(250);
+        probChart.setPrefSize(320, 240);
+        probChart.setMinSize(320, 240);
         probChart.setStyle("-fx-background-color: transparent;");
 
         XYChart.Series<String, Number> probSeries = new XYChart.Series<>();
@@ -771,28 +809,83 @@ public class TeacherDashboardView {
         }
         probChart.getData().add(probSeries);
 
-        box.getChildren().addAll(row1, probChart);
+        // Focus Violations Tracker Bar Chart
+        CategoryAxis xAxisViolations = new CategoryAxis();
+        xAxisViolations.setLabel("Student");
+        xAxisViolations.setTickLabelFill(Color.web(Theme.TEXT_MUTED));
 
-        applyChartThemeStyles(xpChart, probChart, pieChart);
+        NumberAxis yAxisViolations = new NumberAxis();
+        yAxisViolations.setLabel("Violations");
+        yAxisViolations.setTickLabelFill(Color.web(Theme.TEXT_MUTED));
+        yAxisViolations.setMinorTickVisible(false);
+        yAxisViolations.setTickUnit(1);
+
+        BarChart<String, Number> violationsChart = new BarChart<>(xAxisViolations, yAxisViolations);
+        violationsChart.setTitle("Focus Violations Tracker");
+        violationsChart.setLegendVisible(false);
+        violationsChart.setPrefSize(300, 240);
+        violationsChart.setMinSize(300, 240);
+        violationsChart.setStyle("-fx-background-color: transparent;");
+
+        XYChart.Series<String, Number> violationsSeries = new XYChart.Series<>();
+        int totalViolations = 0;
+        for (DatabaseManager.StudentInfo student : allStudents) {
+            violationsSeries.getData().add(new XYChart.Data<>(student.username, student.violations));
+            totalViolations += student.violations;
+        }
+        violationsChart.getData().add(violationsSeries);
+
+        // StackPane container for Violations Chart and "All Quiet" overlay label
+        StackPane violationsChartStack = new StackPane();
+        violationsChartStack.setPrefSize(300, 240);
+        violationsChartStack.getChildren().add(violationsChart);
+
+        if (totalViolations == 0) {
+            Label noViolationsLbl = new Label("✨ All Quiet: No Violations logged!");
+            noViolationsLbl.setFont(Font.font("Segoe UI", FontWeight.BOLD, 12));
+            noViolationsLbl.setTextFill(Color.web(Theme.SUCCESS));
+            noViolationsLbl.setStyle(
+                "-fx-background-color: rgba(15, 23, 42, 0.85);" +
+                "-fx-background-radius: 8;" +
+                "-fx-border-color: " + Theme.SUCCESS + ";" +
+                "-fx-border-width: 1.5;" +
+                "-fx-border-radius: 8;" +
+                "-fx-padding: 8 16;" +
+                "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.5), 8, 0, 0, 1);"
+            );
+            violationsChartStack.getChildren().add(noViolationsLbl);
+            StackPane.setAlignment(noViolationsLbl, Pos.CENTER);
+        }
+
+        row2.getChildren().addAll(probChart, violationsChartStack);
+
+        box.getChildren().addAll(row1, row2);
+
+        applyChartThemeStyles(xpChart, probChart, violationsChart, pieChart);
 
         return box;
     }
 
-    private void applyChartThemeStyles(XYChart<?, ?> chart1, XYChart<?, ?> chart2, PieChart pie) {
+    private void applyChartThemeStyles(XYChart<?, ?> chart1, XYChart<?, ?> chart2, XYChart<?, ?> chart3, PieChart pie) {
         chart1.lookupAll(".chart-plot-background").forEach(n -> n.setStyle("-fx-background-color: transparent;"));
         chart2.lookupAll(".chart-plot-background").forEach(n -> n.setStyle("-fx-background-color: transparent;"));
+        chart3.lookupAll(".chart-plot-background").forEach(n -> n.setStyle("-fx-background-color: transparent;"));
 
         chart1.lookupAll(".chart-title").forEach(n -> n.setStyle("-fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold;"));
         chart2.lookupAll(".chart-title").forEach(n -> n.setStyle("-fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold;"));
+        chart3.lookupAll(".chart-title").forEach(n -> n.setStyle("-fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold;"));
         pie.lookupAll(".chart-title").forEach(n -> n.setStyle("-fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold;"));
 
         chart1.lookupAll(".axis").forEach(n -> n.setStyle("-fx-tick-label-fill: " + Theme.TEXT_MUTED + "; -fx-text-fill: " + Theme.TEXT_MUTED + ";"));
         chart2.lookupAll(".axis").forEach(n -> n.setStyle("-fx-tick-label-fill: " + Theme.TEXT_MUTED + "; -fx-text-fill: " + Theme.TEXT_MUTED + ";"));
+        chart3.lookupAll(".axis").forEach(n -> n.setStyle("-fx-tick-label-fill: " + Theme.TEXT_MUTED + "; -fx-text-fill: " + Theme.TEXT_MUTED + ";"));
         
         chart1.lookupAll(".chart-vertical-grid-lines").forEach(n -> n.setStyle("-fx-stroke: transparent;"));
         chart1.lookupAll(".chart-horizontal-grid-lines").forEach(n -> n.setStyle("-fx-stroke: " + Theme.BORDER + "44;"));
         chart2.lookupAll(".chart-vertical-grid-lines").forEach(n -> n.setStyle("-fx-stroke: transparent;"));
         chart2.lookupAll(".chart-horizontal-grid-lines").forEach(n -> n.setStyle("-fx-stroke: " + Theme.BORDER + "44;"));
+        chart3.lookupAll(".chart-vertical-grid-lines").forEach(n -> n.setStyle("-fx-stroke: transparent;"));
+        chart3.lookupAll(".chart-horizontal-grid-lines").forEach(n -> n.setStyle("-fx-stroke: " + Theme.BORDER + "44;"));
 
         javafx.application.Platform.runLater(() -> {
             chart1.lookupAll(".default-color0.chart-bar").forEach(n -> n.setStyle(
@@ -802,6 +895,10 @@ public class TeacherDashboardView {
             chart2.lookupAll(".default-color0.chart-bar").forEach(n -> n.setStyle(
                 "-fx-bar-fill: " + Theme.PRIMARY + ";" +
                 "-fx-background-radius: 2 2 0 0;"
+            ));
+            chart3.lookupAll(".default-color0.chart-bar").forEach(n -> n.setStyle(
+                "-fx-bar-fill: " + Theme.DANGER + ";" +
+                "-fx-background-radius: 4 4 0 0;"
             ));
 
             int index = 0;

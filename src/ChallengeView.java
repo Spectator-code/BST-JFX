@@ -47,6 +47,15 @@ public class ChallengeView {
     private StackPane toastPane;   // top-of-screen protection toast
     private Label     toastLabel;  // reused toast label node
 
+    public ChallengeView() {
+        int unsolved = App.db.getFirstUnsolvedProblemId();
+        this.currentProblemId = unsolved != -1 ? unsolved : 1;
+    }
+
+    public ChallengeView(int startProblemId) {
+        this.currentProblemId = startProblemId;
+    }
+
     public Parent getView() {
         // ── Root is StackPane so overlay sits on top ───────────────────────
         StackPane rootStack = new StackPane();
@@ -400,19 +409,74 @@ public class ChallengeView {
 
         ComboBox<String> selector = new ComboBox<>();
         selector.setMaxWidth(Double.MAX_VALUE);
-        selector.setStyle(
-            "-fx-background-color: " + Theme.NAV_BG + ";" +
-            "-fx-text-fill: white;" +
-            "-fx-border-color: " + Theme.BORDER + ";" +
-            "-fx-border-radius: 8;" +
-            "-fx-background-radius: 8;" +
-            "-fx-padding: 2 6;"
-        );
+        selector.setVisibleRowCount(10);
+
+        // Populate items
         for (ProblemManager.Problem prob : ProblemManager.getAll()) {
             String mark = solvedList.contains(prob.id) ? "✅ " : "   ";
             selector.getItems().add(mark + prob.id + ". " + prob.title);
         }
         selector.getSelectionModel().select(id - 1);
+
+        // Custom cell factory — styles EACH popup list item with dark bg + white text
+        selector.setCellFactory(lv -> new ListCell<String>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setGraphic(null);
+                    setStyle("-fx-background-color: " + Theme.NAV_BG + ";");
+                } else {
+                    setText(item);
+                    setFont(Font.font("Segoe UI", 13));
+                    setTextFill(Color.WHITE);
+                    boolean solved = item.startsWith("✅");
+                    setStyle(
+                        "-fx-background-color: " + Theme.NAV_BG + ";" +
+                        "-fx-padding: 7 10;" +
+                        (solved ? "-fx-text-fill: #7fff9e;" : "-fx-text-fill: white;")
+                    );
+                    // Hover effect
+                    setOnMouseEntered(e -> setStyle(
+                        "-fx-background-color: " + Theme.PRIMARY + "55;" +
+                        "-fx-padding: 7 10;" +
+                        (solved ? "-fx-text-fill: #7fff9e;" : "-fx-text-fill: white;")
+                    ));
+                    setOnMouseExited(e -> setStyle(
+                        "-fx-background-color: " + Theme.NAV_BG + ";" +
+                        "-fx-padding: 7 10;" +
+                        (solved ? "-fx-text-fill: #7fff9e;" : "-fx-text-fill: white;")
+                    ));
+                }
+            }
+        });
+
+        // Button cell — what shows when the ComboBox is closed
+        selector.setButtonCell(new ListCell<String>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                } else {
+                    setText(item);
+                    setFont(Font.font("Segoe UI", 13));
+                    setTextFill(Color.WHITE);
+                }
+                setStyle("-fx-background-color: " + Theme.NAV_BG + "; -fx-padding: 4 8;");
+            }
+        });
+
+        // Style the ComboBox container/arrow
+        selector.setStyle(
+            "-fx-background-color: " + Theme.NAV_BG + ";" +
+            "-fx-border-color: " + Theme.BORDER + ";" +
+            "-fx-border-radius: 8;" +
+            "-fx-background-radius: 8;" +
+            "-fx-padding: 2 4;"
+        );
+
         selector.setOnAction(e -> {
             int selectedId = selector.getSelectionModel().getSelectedIndex() + 1;
             loadProblem(selectedId);
@@ -694,6 +758,10 @@ public class ChallengeView {
                         && explorer.hasNode(20) && explorer.hasNode(40);
             case 20 -> explorer.hasNode(45) && explorer.hasNode(15) && explorer.hasNode(75)
                         && explorer.hasNode(10) && explorer.hasNode(25);
+            case 21 -> explorer.hasNode(40) && explorer.hasNode(20) && explorer.hasNode(60);
+            case 22 -> explorer.hasNode(35) && explorer.hasNode(75) && (log.contains("found node 75") || log.contains("✔"));
+            case 23 -> explorer.hasNode(10) && explorer.hasNode(20) && explorer.hasNode(30)
+                        && explorer.getRootValue() == 20 && explorer.getHeight() == 2;
             default -> explorer.getCode().trim().length() > 5;
         };
     }
@@ -726,6 +794,9 @@ public class ChallengeView {
         if (test.contains("searched 8")) {
             return log.contains("found node 8") || log.contains("✔") || log.contains("search(8)");
         }
+        if (test.contains("searched 75")) {
+            return log.contains("found node 75") || log.contains("✔");
+        }
         if (test.contains("found 8")) {
             return log.contains("found node") || log.contains("✔");
         }
@@ -754,6 +825,10 @@ public class ChallengeView {
         }
         if (test.contains("post-order traversal")) {
             return explorer.hasNode(45) && explorer.hasNode(15) && explorer.hasNode(75) && explorer.hasNode(10) && explorer.hasNode(25);
+        }
+        if (test.contains("balanced btree split")) {
+            return explorer.hasNode(10) && explorer.hasNode(20) && explorer.hasNode(30)
+                && explorer.getRootValue() == 20 && explorer.getHeight() == 2;
         }
         
         return false;

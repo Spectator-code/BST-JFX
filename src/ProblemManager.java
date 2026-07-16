@@ -144,6 +144,24 @@ public class ProblemManager {
             Arrays.asList("Post-Order traversal"),
             Arrays.asList("Post-order visits Left → Right → Root. The root always appears last.")
         ));
+        CACHE.add(new Problem(21, "2-3 Tree Insertion", "easy",
+            "Initialize a 2-3 Tree and insert the values 40, 20, 60. This builds a simple, balanced 2-3 Tree.",
+            "BTree tree = new BTree();\ntree.insert(40);\ntree.insert(20);\ntree.insert(60);\n",
+            Arrays.asList("Has Node 40", "Has Node 20", "Has Node 60"),
+            Arrays.asList("Use BTree tree = new BTree(); and tree.insert(val) for each value.")
+        ));
+        CACHE.add(new Problem(22, "2-3 Tree Search", "medium",
+            "Insert 35 and 75 into a 2-3 Tree, then search for 75.",
+            "BTree tree = new BTree();\ntree.insert(35);\ntree.insert(75);\ntree.search(75);\n",
+            Arrays.asList("Has Node 35", "Has Node 75", "Searched 75"),
+            Arrays.asList("Use tree.search(75) after inserting the values.")
+        ));
+        CACHE.add(new Problem(23, "2-3 Tree Split Propagation", "hard",
+            "Insert 10, 20, and 30 into a 2-3 Tree. Adding 30 triggers a node overflow and split, pushing 20 up to become the new root. Verify the root becomes 20.",
+            "BTree tree = new BTree();\ntree.insert(10);\ntree.insert(20);\ntree.insert(30);\n",
+            Arrays.asList("Balanced BTree Split"),
+            Arrays.asList("When 30 is inserted, the node containing [10, 20, 30] splits, pushing 20 up.")
+        ));
 
         return CACHE;
     }
